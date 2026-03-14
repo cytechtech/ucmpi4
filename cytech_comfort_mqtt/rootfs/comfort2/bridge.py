@@ -1,0 +1,3351 @@
+# Copyright(c) 2018 Khor Chin Heong (koochyrat@gmail.com) for original project code and additional 
+# copyright(c) 2025 Ingo de Jager (ingodejager@gmail.com) for modifications done 
+# to the original project sources contained in this project.
+#
+# Modified by Ingo de Jager 2025 (ingodejager@gmail.com)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Notes:
+#
+#
+import defusedxml.ElementTree as ET
+import ssl
+from OpenSSL import crypto
+import os
+import requests
+import json
+from pathlib import Path
+import re
+import signal
+import ipaddress
+import socket
+import serial
+import time
+import datetime
+import threading
+import logging
+from datetime import datetime, timedelta
+import secrets
+import paho.mqtt.client as mqtt
+from argparse import ArgumentParser
+from comfort_protocol import (
+    ComfortLUUserLoggedIn,
+    ComfortIPInputActivationReport,
+    ComfortCTCounterActivationReport,
+    ComfortTRReport,
+    ComfortOPOutputActivationReport,
+    ComfortFLFlagActivationReport,
+    ComfortBYBypassActivationReport,
+    ComfortZ_ReportAllZones,
+    Comfort_RSensorActivationReport,
+    Comfort_R_ReportAllSensors,
+    ComfortY_ReportAllOutputs,
+    Comfort_Y_ReportAllOutputs,
+    ComfortB_ReportAllBypassZones,
+    Comfortf_ReportAllFlags,
+    ComfortM_SecurityModeReport,
+    ComfortS_SecurityModeReport,
+    ComfortERArmReadyNotReady,
+    ComfortAMSystemAlarmReport,
+    ComfortALSystemAlarmReport,
+    Comfort_A_SecurityInformationReport,
+    ComfortARSystemAlarmReport,
+    ComfortV_SystemTypeReport,
+    Comfort_U_SystemCPUTypeReport,
+    Comfort_EL_HardwareModelReport,
+    Comfort_D_SystemVoltageReport,
+    ComfortSN_SerialNumberReport,
+    ComfortEXEntryExitDelayStarted,
+)
+
+from cclx_parser import parse_cclx
+import settings
+from collections import deque
+import json
+from pathlib import Path
+
+import inspect
+
+from options import load_options, get_str, get_int, get_bool
+
+logger = logging.getLogger(__name__)
+_opts = load_options()
+
+settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
+settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
+settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
+settings.MQTTPASSWORD = get_str(_opts, "mqtt_password", None)
+settings.MQTTENCRYPTION = get_bool(_opts, "mqtt_encryption", False)
+
+
+ACTIVE_CLIENT = None
+MQTT_DEVICE_COMFORT = None  # Comfort device dict used for MQTT discovery republish on reload
+
+class LoggedSerial(serial.Serial):
+    """Serial wrapper that logs all TX/RX, even fragmented ASCII-hex writes."""
+    def write(self, data):
+        # Try decode ASCII (Comfort uses ASCII hex)
+        try:
+            text = data.decode("ascii", errors="replace")
+        except Exception:
+            text = repr(data)
+
+        clean = "".join(c for c in text if c.upper() in "0123456789ABCDEF")
+
+        #logger.info("SERIAL TX RAW: %r", data)
+        logger.info("SERIAL TX ASCII: %r", text)
+        if clean:
+            logger.info(
+                "SERIAL TX HEX-GROUPED: %s",
+                " ".join(clean[i:i+2] for i in range(0, len(clean), 2))
+            )
+
+        return super().write(data)
+
+    def read(self, size=1):
+        data = super().read(size)
+        if data:
+            try:
+                text = data.decode("ascii", errors="replace")
+            except Exception:
+                text = repr(data)
+
+            clean = "".join(c for c in text if c.upper() in "0123456789ABCDEF")
+
+           # logger.info("SERIAL RX RAW: %r", data)
+            logger.info("SERIAL RX ASCII: %r", text)
+            if clean:
+                logger.info(
+                    "SERIAL RX HEX-GROUPED: %s",
+                    " ".join(clean[i:i+2] for i in range(0, len(clean), 2))
+                )
+
+        return data
+
+
+
+
+
+def boolean_string(s):
+
+    if s.lower() == 'true':
+        return True
+    #elif s.lower() == 'false':
+    #    return False
+    else:
+        #raise ValueError("Not a valid boolean string. Set to either 'True' or 'False'.")
+        return False
+    
+parser = ArgumentParser()
+
+group = parser.add_argument_group('MQTT options')
+group.add_argument(
+    '--broker-address',
+    required=True,
+    help='IP Address of the MQTT broker')
+
+group.add_argument(
+    '--broker-port',
+    type=int, default=1883,
+    help="TCP Port Number to connect to the MQTT broker. [default: '1883']")
+
+group.add_argument(
+    '--broker-username',
+    required=True,
+    help='MQTT Username to use for MQTT broker authentication.')
+
+group.add_argument(
+    '--broker-password',
+    required=True,
+    help='MQTT Password to use for MQTT broker authentication.')
+
+group.add_argument(
+    '--broker-protocol',
+    required=False,
+    dest='broker_protocol', default='TCP', choices=(
+         'TCP', 'WebSockets'),
+    help="TCP or WebSockets Transport Protocol for MQTT broker. [default: 'TCP']")
+
+group.add_argument(
+    '--broker-encryption',
+    type=boolean_string, default='false',
+    help="Use MQTT TLS encryption, 'True'|'False'. [default: 'False']")
+
+group.add_argument(
+    '--broker-ca',
+    help='Filename of CA certificate to trust.')
+group.add_argument(
+    '--broker-client-cert',
+    help='Filename of PEM-encoded client certificate (public part). If not '
+         'specified, client authentication will not be used. Must also '
+         'supply the private key (--broker-client-key).')
+
+group.add_argument(
+    '--broker-client-key',
+    help='Filename of PEM-encoded client key (private part). If not '
+         'specified, client authentication will not be used. Must also '
+         'supply the public key (--broker-client-cert). If this file is encrypted, Python '
+         'will prompt for the password at the command-line.')
+
+group = parser.add_argument_group('Comfort System options')
+# group.add_argument(
+#     '--comfort-address',
+#     required=True,
+#     help='IP Address of the Comfort system in IPV4 format.')
+
+# group.add_argument(
+#     '--comfort-port',
+#     type=int, default=1002,
+#     help="TCP Port to connect to Comfort system. [default: '1002']")
+
+group.add_argument(
+    '--comfort-login-id',
+    required=True,
+    help='Comfort system Login ID.')
+
+group.add_argument(
+    '--comfort-cclx-file',
+    help='Comfort (CCLX) Configuration filename.')
+
+group.add_argument(
+    '--comfort-battery-update',
+    type=int, default=1,
+    help="Comfort MQTT Bridge 'Battery Update' query ID. [default: '1']")
+
+group.add_argument(
+    '--comfort-time',
+    type=boolean_string, default='false',
+    help="Set Comfort Date and Time flag, 'True'|'False'. [default: 'False']")
+
+group = parser.add_argument_group('Comfort Alarm options')
+group.add_argument(
+    '--alarm-inputs',
+    type=int, default=8,
+    help="Number of physical Zone Inputs, values from 8 - " + str(settings.MAX_ZONES) + " in increments of 8. [default: '8']")
+
+group.add_argument(
+    '--alarm-outputs',
+    type=int, default=0,
+    help="Number of physical Zone Outputs, values from 0 - " + str(settings.MAX_OUTPUTS) + " in increments of 8. [default: '0']")
+
+group.add_argument(
+    '--alarm-responses',
+    type=int, default=0,
+    help="Number of Responses, values 0 - 1024. [default: '0']")
+
+group = parser.add_argument_group('Logging options')
+group.add_argument(
+    '--verbosity',
+    dest='log_verbosity', default='INFO', choices=(
+        'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'),
+    help='Verbosity of logging to emit [default: %(default)s]')
+
+option = parser.parse_args()
+
+logging.basicConfig(
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    level=option.log_verbosity,
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+TOKEN = os.getenv('SUPERVISOR_TOKEN')
+ALPINE_VERSION = "N/A" if os.getenv('ALPINE_VERSION') == None else os.getenv('ALPINE_VERSION')
+
+supervisor_url = 'http://supervisor'
+addon_info_url = f'{supervisor_url}/addons/self/info'
+
+headers = {
+    'Authorization': f'Bearer {TOKEN}',
+    'Content-Type': 'application/json'
+}
+
+try:
+    response = requests.get(addon_info_url, headers=headers, timeout=5)
+except:
+    logger.error("Failed to connect to Home Assistant Supervisor")
+else:
+    if response.status_code == 200:
+        addon_info = response.json()
+        ADDON_SLUG = addon_info['data']['slug']
+        ADDON_VERSION = addon_info['data']['version']
+    else:
+        logger.error("Failed to get Addon Info: Error Code %s, %s", response.status_code, response.reason)
+
+logger.info('Importing the add-on configuration options')
+
+
+logger.info('Importing the add-on configuration options')
+
+MQTT_HOST = option.broker_address
+MQTT_PORT = option.broker_port
+MQTT_USER = option.broker_username
+MQTT_PASSWORD = option.broker_password
+MQTT_PROTOCOL = option.broker_protocol
+MQTT_ENCRYPTION = option.broker_encryption
+MQTT_CA_CERT = option.broker_ca
+MQTT_CLIENT_CERT = option.broker_client_cert
+MQTT_CLIENT_KEY = option.broker_client_key
+
+def is_ipv4_address(address):
+    try:
+        ipaddress.ip_address(address)
+        return True
+    except ValueError:
+        return False
+
+def resolve_to_ip(fqdn):
+    try:
+        return socket.gethostbyname(fqdn)
+    except socket.gaierror:
+        return None
+
+def get_ip_address(input_value):
+    if is_ipv4_address(input_value):
+        return input_value
+    else:
+        return resolve_to_ip(input_value)
+
+def validate_port(_port, min=1, max=65535):
+    try:
+        port = int(_port)
+        if min <= int(port) <= max:
+            return True
+        else:
+            logging.error(f"Invalid parameter: {port}")     #Integer
+            return False
+    except Exception as e:
+        logging.error(f"Invalid parameter: {_port}")        #Original passed value
+        return False    
+     
+# Check to see if it's a Hostname.domain or IPv4 address. Resolve Hostname to IP.
+# COMFORT_ADDRESS=get_ip_address(option.comfort_address)
+MQTT_SERVER=get_ip_address(option.broker_address)
+
+settings.COMFORT_LOGIN_ID=option.comfort_login_id
+settings.COMFORT_CCLX_FILE=option.comfort_cclx_file
+MQTT_LOG_LEVEL=option.log_verbosity if option.log_verbosity in ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'] else 'INFO'
+settings.COMFORT_INPUTS=int(option.alarm_inputs) if validate_port(option.alarm_inputs,8,settings.MAX_ZONES) else 8
+settings.COMFORT_OUTPUTS=int(option.alarm_outputs) if validate_port(option.alarm_outputs,0,settings.MAX_OUTPUTS) else 0
+settings.COMFORT_RESPONSES=int(option.alarm_responses) if validate_port(option.alarm_responses,0,settings.MAX_RESPONSES) else 0
+
+settings.COMFORT_BATTERY_STATUS_ID = (
+    int(option.comfort_battery_update)
+    if str(option.comfort_battery_update).isdigit()
+    and int(option.comfort_battery_update) in [0, 1] + list(range(33, 40))
+    else 1
+)
+
+# Sync runtime configuration into settings for protocol layer
+
+settings.COMFORT_TIME=str(option.comfort_time)
+
+
+if settings.COMFORT_INPUTS < 8:
+    settings.COMFORT_INPUTS = 8
+if settings.COMFORT_INPUTS > settings.MAX_ZONES:                          # 128 is max. setting for possible future expansion. 96 currently supported by Cytech.
+    settings.COMFORT_INPUTS = settings.MAX_ZONES
+ALARMVIRTUALINPUTRANGE = range(1,int(settings.COMFORT_INPUTS)+1) 
+
+
+if settings.COMFORT_OUTPUTS < 0:
+    settings.COMFORT_OUTPUTS = 0
+if settings.COMFORT_OUTPUTS > settings.MAX_OUTPUTS:
+    settings.COMFORT_OUTPUTS = settings.MAX_OUTPUTS
+ALARMNUMBEROFOUTPUTS = settings.COMFORT_OUTPUTS                  
+
+
+if settings.COMFORT_RESPONSES < 0:
+    settings.COMFORT_RESPONSES = 0
+if settings.COMFORT_RESPONSES > settings.MAX_RESPONSES:
+    settings.COMFORT_RESPONSES = settings.MAX_RESPONSES
+ALARMNUMBEROFRESPONSES = settings.COMFORT_RESPONSES              #set in configuration according to your system. Default 0, Max 1024
+
+
+logger.info('Completed importing addon configuration options')
+
+# The following variables values were passed through via the Home Assistant add on configuration options
+logger.debug('The following variable values were passed through via Home Assistant')
+logger.debug('MQTT_USER = %s', MQTT_USER)
+logger.debug('MQTT_PASSWORD = ******')
+logger.debug('MQTT_SERVER = %s', MQTT_SERVER)
+
+if not MQTT_ENCRYPTION: logger.debug('MQTT_PROTOCOL = %s/%s (Unsecure)', MQTT_PROTOCOL, MQTT_PORT)
+else: logger.debug('MQTT_PROTOCOL = %s/%s (Encrypted)', MQTT_PROTOCOL, MQTT_PORT)
+
+#logger.debug('COMFORT_ADDRESS = %s', COMFORT_ADDRESS)
+#logger.debug('COMFORT_PORT = %s', COMFORT_PORT)
+logger.debug('COMFORT_LOGIN_ID = ******')
+logger.debug('COMFORT_CCLX_FILE = %s', settings.COMFORT_CCLX_FILE)
+logger.debug('COMFORT_BATTERY_STATUS_ID = %s', str(settings.COMFORT_BATTERY_STATUS_ID))
+logger.debug('MQTT_CA_CERT = %s', MQTT_CA_CERT)          
+logger.debug('MQTT_CLIENT_CERT = %s', MQTT_CLIENT_CERT)  
+logger.debug('MQTT_CLIENT_KEY = %s', MQTT_CLIENT_KEY)    
+
+logger.debug('MQTT_LOG_LEVEL = %s', MQTT_LOG_LEVEL)
+logger.debug('COMFORT_TIME= %s', settings.COMFORT_TIME)
+
+# Map HA variables to internal variables.
+
+MQTTBROKERIP = MQTT_SERVER
+MQTTBROKERPORT = int(MQTT_PORT)
+MQTTUSERNAME = MQTT_USER
+MQTTPASSWORD = MQTT_PASSWORD
+PINCODE = settings.COMFORT_LOGIN_ID
+
+
+# Send all alarm related data to HA so it can be shown in the UX as a live log of events.
+# This is for debugging and also to see the history of events leading up to an alarm.
+
+
+
+class RollingMqttLog:
+    def __init__(self, mqtt_client, topic, max_lines=80, ts_format="%H:%M:%S"):
+        self.mqtt = mqtt_client
+        self.topic = topic
+        self.lines = deque(maxlen=max_lines)
+        self.ts_format = ts_format
+        self._last_key = None
+        self._last_time = None
+
+
+    def add(self, text, level="INFO"):
+        safe = str(text).replace("\r", " ").replace("\n", " ").strip()
+        if not safe:
+            return
+
+        now = datetime.now()
+        key = f"{level}:{safe}"
+
+        # Drop identical repeats within 2 seconds
+        if self._last_key == key and self._last_time and (now - self._last_time).total_seconds() < 2:
+            return
+
+        self._last_key = key
+        self._last_time = now
+
+        ts = datetime.now().strftime(self.ts_format)
+        line = f"[{ts}] {level}: {safe}"
+        self.lines.append(line)
+
+        payload_text = "\n".join(self.lines)
+        payload = json.dumps({"state": ts, "log": payload_text})
+
+        self.mqtt.publish(self.topic, payload, qos=1, retain=True)
+
+    def clear(self, note="Log cleared"):
+        self.lines.clear()
+        self.add(note, level="INFO")
+
+
+class Comfort2(mqtt.Client):
+
+
+
+    def init(self, mqtt_ip, mqtt_port, mqtt_username, mqtt_password, comfort_pincode, mqtt_version):
+        self.mqtt_ip = mqtt_ip
+        self.mqtt_port = mqtt_port
+        self.comfort_pincode = comfort_pincode
+        self.connected = False
+        self.username_pw_set(mqtt_username, mqtt_password)
+        self.version = mqtt_version
+
+        self._last_reload_ts = 0.0
+        self._reload_lock = threading.Lock()
+
+    def handler(self, signum, frame):                 # Ctrl-Z Keyboard Interrupt
+        logger.debug('SIGTSTP (Ctrl-Z) intercepted')
+
+    def sigquit_handler(self, signum, frame):         # Ctrl-\ Keyboard Interrupt
+        logger.debug("SIGQUIT intercepted")
+        settings.RUN = False
+    
+    
+    if os.name != 'nt':
+        signal.signal(signal.SIGTSTP, handler)
+
+    # The callback for when the client receives a CONNACK response from the server.
+    def on_connect(self, client, userdata, flags, rc, properties):
+
+        settings.FIRST_LOGIN = True      # Set to True to start refresh on_connect
+
+        if rc == 'Success':
+
+            settings.BROKERCONNECTED = True
+            settings.device_properties['BridgeConnected'] = 1
+
+            logger.info('MQTT Broker Connection %s', str(rc))
+
+            logger.info("Clearing discovery (inputs/outputs/flags)")
+            self.clear_input_discovery()
+            self.clear_output_discovery()
+            self.clear_flag_discovery()
+            self.clear_counter_discovery()
+            self.clear_sensor_discovery()
+            self.clear_timer_discovery()
+            time.sleep(0.25)    # Short wait for MQTT to be ready to accept commands.
+
+            # You need to subscribe to your own topics to enable publish messages activating Comfort entities.
+            self.subscribe(settings.ALARMCOMMANDTOPIC)
+            self.subscribe(settings.REFRESHTOPIC)
+            self.subscribe(settings.RELOADTOPIC, qos=1)
+            self.subscribe(settings.BATTERYREFRESHTOPIC)
+            self.subscribe(settings.DOMAIN)
+            self.subscribe("homeassistant/status")      # Track Status changes for Home Assistant via MQTT Broker.
+
+            self.subscribe(settings.ALARMLOGCLEARTOPIC)
+
+
+            for i in range(1, ALARMNUMBEROFOUTPUTS + 1):
+                self.subscribe(settings.ALARMOUTPUTCOMMANDTOPIC % i)
+            
+            if ALARMNUMBEROFOUTPUTS > 0:
+                logger.debug("Subscribed to %d Zone Outputs", ALARMNUMBEROFOUTPUTS)
+            else:
+                logger.debug("Not Subscribed to any Zone Outputs")
+
+            for i in ALARMVIRTUALINPUTRANGE: #for virtual inputs #inputs+1 to 128
+                self.subscribe(settings.ALARMINPUTCOMMANDTOPIC % i)
+
+            logger.debug("Subscribed to %d Zone Inputs", ALARMVIRTUALINPUTRANGE[-1])
+
+            for i in range(1, settings.ALARMNUMBEROFFLAGS + 1):
+                if i >= 255:
+                    break
+                self.subscribe(settings.ALARMFLAGCOMMANDTOPIC % i)
+            logger.debug("Subscribed to %d Flags", settings.ALARMNUMBEROFFLAGS)
+                
+                ## Sensors ##
+            for i in range(0, settings.ALARMNUMBEROFSENSORS):
+                self.subscribe(settings.ALARMSENSORCOMMANDTOPIC % i)
+            logger.debug("Subscribed to %d Sensors", settings.ALARMNUMBEROFSENSORS)
+
+            for i in range(0, settings.ALARMNUMBEROFCOUNTERS + 1):
+                self.subscribe(settings.ALARMCOUNTERCOMMANDTOPIC % i)    # Value or Level
+            logger.debug("Subscribed to %d Counters", settings.ALARMNUMBEROFCOUNTERS)
+
+            for i in range(1, ALARMNUMBEROFRESPONSES + 1):      # Responses as specified from HA options.
+                self.subscribe(settings.ALARMRESPONSECOMMANDTOPIC % i)
+            if ALARMNUMBEROFRESPONSES > 0:
+                logger.debug("Subscribed to %d Responses", ALARMNUMBEROFRESPONSES)
+            else:
+                logger.debug("Not Subscribed to any Responses")
+
+            if settings.FIRST_LOGIN == True:
+                logger.debug("Synchronizing Comfort Data...")
+                self.readcurrentstate()
+                logger.debug("Synchronization Done.")
+            
+            # Publish zone names/zonewords from CCLX as retained metadata
+            self.publish_all_maps()  
+
+            self.alarm_log = RollingMqttLog(self, settings.ALARMLOGTOPIC, max_lines=80)
+            # CLear any old data and start the log with a fresh entry for the new connection.
+            self.publish(
+                settings.ALARMLOGTOPIC,
+                '{"state":"starting","log":""}',
+                qos=1,
+                retain=True
+            )
+            # self.alarm_log.add("Addon Started, MQTT Broker Connected.", level="INFO")
+            # logger.warning("BOOT: calling initial reload")
+            # self._handle_reload_request(source="startup", reason="boot")
+            # logger.warning("BOOT: initial reload complete")
+
+        else:
+            logger.error('MQTT Broker Connection Failed (%s)', str(rc))
+            settings.BROKERCONNECTED = False
+            settings.device_properties['BridgeConnected'] = 0
+
+    def on_disconnect(self, client, userdata, flags, reasonCode, properties):  #client, userdata, flags, reason_code, properties
+        if reasonCode == 0:
+            logger.info('MQTT Broker Disconnect Successfull (%s)', str(reasonCode))
+        else:
+            settings.BROKERCONNECTED = False
+            settings.device_properties['BridgeConnected'] = 0
+            logger.error('MQTT Broker Connection Failed (%s). Check Network or MQTT Broker connection settings', str(reasonCode))
+            settings.FIRST_LOGIN = True
+
+    # The callback for when a PUBLISH message is received from the server.
+    # Converted to use serial comms - send commands to Comfort via uart.
+    def on_message(self, client, userdata, msg):    #=0
+        payload_raw = (msg.payload or b"").decode("utf-8", errors="replace").strip()
+
+        # Default behaviour for non-alarm topics:
+        msgstr = payload_raw
+        pin_entered = ""
+
+        # Only parse "COMMAND [PIN]" on the alarm command topic
+        if msg.topic == settings.ALARMCOMMANDTOPIC:
+            logger.debug("cmd is %s", payload_raw)
+            parts = payload_raw.split(maxsplit=1)
+            msgstr = (parts[0] if parts else "").strip().upper()
+            pin_entered = (parts[1] if len(parts) > 1 else "").strip()
+
+            # Only log PIN when it's actually a DISARM command
+            if msgstr == "DISARM" and pin_entered:
+                logger.debug("PIN entered in command: %s", pin_entered)
+
+        if msg.topic == settings.ALARMLOGCLEARTOPIC:
+            logger.debug("In ALARMLOGCLEARTOPIC topic is %s",msg.topic )
+            if hasattr(self, "alarm_log"):
+                logger.debug("Calling self.alarm_log.clear")
+                self.alarm_log.clear(note="Log cleared by user")
+            return
+
+        if msg.topic == settings.RELOADTOPIC:
+            logger.info("In RELOADTOPIC, topic is %s",msg.topic )
+            self._on_reload_message(msg)
+            return
+
+
+        if msg.topic == settings.ALARMCOMMANDTOPIC:    
+            logger.debug("In ALARMCOMMANDTOPIC topic is %s",msg.topic )
+            if hasattr(self, "alarm_log"):
+                self.alarm_log.add(f"{msgstr}", level="CMD")
+                if msgstr in ("ARM_AWAY", "ARM_HOME", "ARM_NIGHT", "ARM_VACATION", "REM_ARM_AWAY"):
+                   self.alarm_log.add("Arm requested — checking zones (if any are open, Comfort will report them).", level="INFO")
+
+            if self.connected:
+
+                if msgstr == "ARM_VACATION":
+                    # self.serial.write(("\x03m!04"+self.comfort_pincode+"\r").encode()) #Local arm to 04 vacation mode. Requires # for open zones
+                    self.serial.write(("\x03m!04"+self.comfort_pincode+"\r").encode()) #Local arm to 04 vacation mode. Requires # for open zones
+                    settings.SAVEDTIME = datetime.now()
+                    self.publish(settings.ALARMSTATETOPIC, "arming",qos=2,retain=False)
+                elif msgstr == "ARM_HOME":
+                    self.serial.write(("\x03m!03"+self.comfort_pincode+"\r").encode()) #Local arm to 03 day mode. Requires # for open zones
+                    settings.SAVEDTIME = datetime.now()
+                    self.publish(settings.ALARMSTATETOPIC, "arming",qos=2,retain=False)
+                elif msgstr == "ARM_NIGHT":
+                    self.serial.write(("\x03m!02"+self.comfort_pincode+"\r").encode()) #Local arm to 02 night mode. Requires # for open zones
+                    settings.SAVEDTIME = datetime.now()
+                    self.publish(settings.ALARMSTATETOPIC, "arming",qos=2,retain=False)
+                elif msgstr == "ARM_AWAY":
+                    self.serial.write(("\x03m!01"+self.comfort_pincode+"\r").encode()) #Local arm to 01 away mode. Requires # for open zones + Exit door
+                    settings.SAVEDTIME = datetime.now()
+                    self.publish(settings.ALARMSTATETOPIC, "arming",qos=2,retain=False)
+                elif msgstr == "REM_ARM_AWAY":
+                    self.serial.write(("\x03M!01"+self.comfort_pincode+"\r").encode()) #Remote arm to 01 away mode. Requires # for open zones
+                    settings.SAVEDTIME = datetime.now()
+                    self.publish(settings.ALARMSTATETOPIC, "arming",qos=2,retain=False)
+                elif msgstr == "ARM_CUSTOM_BYPASS":
+                    self.serial.write("\x03KD1A\r".encode())                           #Send '#' key code (KD1A)
+                    settings.SAVEDTIME = datetime.now()
+                elif msgstr == "DISARM":
+                    expected_pin = (self.comfort_pincode or "").strip()
+
+                    # Require PIN entry from UI
+                    if not pin_entered:
+                        logger.warning("Disarm rejected: PIN required")
+                        if hasattr(self, "alarm_log"):
+                            self.alarm_log.add("Disarm rejected: PIN required", level="WARN")
+                        # Optional: publish a message topic you already have
+                        # self.publish(settings.ALARMMESSAGETOPIC, "PIN required", qos=2, retain=False)
+                        return
+
+                    if pin_entered != expected_pin:
+                        logger.warning("Disarm rejected: invalid PIN")
+                        if hasattr(self, "alarm_log"):
+                            self.alarm_log.add("Disarm rejected: invalid PIN", level="WARN")
+                        # Optional:
+                        # self.publish(settings.ALARMMESSAGETOPIC, "Invalid PIN", qos=2, retain=False)
+                        return
+
+                    # OK: disarm (you can use expected_pin or pin_entered; expected_pin is fine)
+                    self.serial.write(("\x03m!00" + expected_pin + "\r").encode())
+                    settings.SAVEDTIME = datetime.now()
+                    self.publish(settings.ALARMSTATETOPIC, "disarming", qos=2, retain=False)
+
+        elif msg.topic.startswith(settings.DOMAIN) and msg.topic.endswith("/refresh"):
+            if msgstr == settings.COMFORT_KEY:
+                logger.info("Valid Refresh AUTH key detected, initiating MQTT refresh...")
+                if settings.COMFORT_CCLX_FILE != None:
+                    config_filename = self.sanitize_filename(settings.COMFORT_CCLX_FILE,'cclx')
+                    if config_filename:
+                        self.add_descriptions(Path("/config/" + config_filename))
+                self.readcurrentstate()
+        
+        elif msg.topic.startswith(settings.DOMAIN) and msg.topic.endswith("/battery_update"):
+
+            Devices = ['0','1']        # Mainboard + Installed Slaves EG. ['0', '1','33','34','35' ti '39'].
+            for device in range(0, int(settings.device_properties['sem_id'])):
+                Devices.append(str(device + 33))    # First Slave at address 33 DEC.
+
+            msgstr_cleaned = msgstr.strip('"')
+            if msgstr_cleaned in Devices and (str(settings.device_properties['CPUType']) == 'ARM' or str(settings.device_properties['CPUType']) == 'Toshiba'):
+                
+                ID = str(f"{int(msgstr_cleaned):02X}")
+
+                #logger.info("msgstr: %s", msgstr.strip('"'))
+                #logger.info("msgstr type: %s", type(msgstr.strip('"')))
+
+                #logger.info("ID: %s", ID)
+                if msgstr_cleaned == '0':
+                    Command = "\x03D?0000\r"
+                    self.serial.write(Command.encode()) # Battery and DC Supply Status Update
+                else:
+                    Command = "\x03D?" + ID + "01\r"
+                    self.serial.write(Command.encode()) # Battery Status Update
+                    time.sleep(0.1)
+                    Command = "\x03D?" + ID + "02\r"
+                    self.serial.write(Command.encode()) # DC Supply Status Update
+                    time.sleep(0.1)
+                settings.SAVEDTIME = datetime.now()
+            else:
+                logger.warning("Unsupported MQTT Battery Update query received for ID: %s.", msgstr_cleaned)
+                logger.warning("Valid ID's: [0,1,33-39] with ARM-powered Comfort is required.")
+
+        elif msg.topic.startswith("homeassistant") and msg.topic.endswith("/status"):
+            if msgstr == "online":
+                logger.info("Home Assistant Status: %s", msgstr)
+                if settings.COMFORT_CCLX_FILE != None:
+                    config_filename = self.sanitize_filename(settings.COMFORT_CCLX_FILE,'cclx')
+                    if config_filename:
+                        self.add_descriptions(Path("/config/" + config_filename))
+                        self.publish_all_maps()  # cytech26 
+                self.readcurrentstate()
+
+            elif msgstr == "offline":
+                logger.info("Home Assistant Status: %s", msgstr)
+
+        elif msg.topic.startswith(settings.DOMAIN+"/output") and msg.topic.endswith("/set"):
+            output = int(msg.topic.split("/")[1][6:])
+            try:
+                state = int(msgstr)
+            except ValueError:
+                logger.debug("Invalid 'output%s/set' value '%s'. Only Integers allowed.", output, msgstr)
+                return
+            if self.connected:
+                if state >= 0 and state < 5:
+                    self.serial.write(("\x03O!%02X%02X\r" % (output, state)).encode())
+                    settings.SAVEDTIME = datetime.now()
+        elif msg.topic.startswith(settings.DOMAIN+"/response") and msg.topic.endswith("/set"):
+            response = int(msg.topic.split("/")[1][8:])
+            if self.connected:
+                if (response in range(1, ALARMNUMBEROFRESPONSES + 1)) and (response in range(256, 1025)):   # Check for  valid response numbers > 255 but less than Max.
+                    result = self.DecimalToSigned16(response)                                               # Returns hex value.
+                    self.serial.write(("\x03R!%s\r" % result).encode())                              # Response with 16-bit converted hex number
+                    settings.SAVEDTIME = datetime.now()
+                elif (response in range(1, ALARMNUMBEROFRESPONSES + 1)) and (response in range(1, 256)):    # Check for 8-bit values
+                    self.serial.write(("\x03R!%02X\r" % response).encode())                          # Response with 8-bit number
+                    settings.SAVEDTIME = datetime.now()
+                logger.debug("Activating Response %d",response )
+        elif msg.topic.startswith(settings.DOMAIN+"/input") and msg.topic.endswith("/set"):                          # Can only set the State, the Bypass, Name and Time cannot be changed.
+            virtualinput = int(msg.topic.split("/")[1][5:])
+            try:
+                state = int(msgstr)
+            except ValueError:
+                logger.debug("Invalid 'input%s/set' value '%s'. Only Integers allowed.", virtualinput, msgstr)
+                return
+            if self.connected:
+                self.serial.write(("\x03I!%02X%02X\r" % (virtualinput, state)).encode())
+                settings.SAVEDTIME = datetime.now()
+        elif msg.topic.startswith(settings.DOMAIN+"/flag") and msg.topic.endswith("/set"):
+            flag = int(msg.topic.split("/")[1][4:])
+            try:
+                state = int(msgstr)
+            except ValueError:
+                logger.debug("Invalid 'flag%s/set' value '%s'. Only Integers allowed.", flag, msgstr)
+                return
+            if self.connected:
+                self.serial.write(("\x03F!%02X%02X\r" % (flag, state)).encode()) #was F!
+                settings.SAVEDTIME = datetime.now()
+        elif msg.topic.startswith(settings.DOMAIN+"/counter") and msg.topic.endswith("/set"): # counter set
+            counter = int(msg.topic.split("/")[1][7:])
+            if not msgstr.isnumeric() and not msgstr == "ON" and not msgstr == "OFF":
+                logger.debug("Invalid Counter%s Set value detected ('%s'), only 'ON', 'OFF' and Integer values allowed", str(counter), str(msgstr))
+            elif msgstr == "ON":
+                state = 255
+                if self.connected:
+                    self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(state))).encode()) 
+                    settings.SAVEDTIME = datetime.now()
+            elif msgstr == "OFF":
+                state = 0
+                if self.connected:
+                    self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(state))).encode()) 
+                    settings.SAVEDTIME = datetime.now()
+            else:
+                state = int(msgstr)
+                if self.connected:
+                    self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(state))).encode()) 
+                    settings.SAVEDTIME = datetime.now()
+        elif msg.topic.startswith(settings.DOMAIN+"/sensor") and msg.topic.endswith("/set"): # sensor set
+            sensor = int(msg.topic.split("/")[1][6:])
+            try:
+                state = int(msgstr)
+            except ValueError:
+                logger.debug("Invalid 'sensor%s/set' value '%s'. Only Integers allowed.", sensor, msgstr)
+                return
+            if self.connected:
+                self.serial.write(("\x03s!%02X%s\r" % (sensor, self.DecimalToSigned16(state))).encode()) # sensor needs 16 bit signed number
+                settings.SAVEDTIME = datetime.now()
+
+    def DecimalToSigned16(self,value):      # Returns Comfort corrected HEX string value from signed 16-bit decimal value.
+        return ('{:04X}'.format((int((value & 0xff) * 0x100 + (value & 0xff00) / 0x100))) )
+    
+    def CheckZoneNameFormat(self,value):      # Checks CSV file Zone Name to only contain valid characters. Return False if it fails else True
+        pattern = r'^(?![ ]{1,}).{1}[a-zA-Z0-9_ -/]+$'
+        return bool(re.match(pattern, value))
+    
+    def CheckIndexNumberFormat(self,value,max_index = 1024):      # Checks CSV file Zone Number to only contain valid characters. Return False if it fails else True
+        pattern = r'^[0-9]+$'
+        if bool(re.match(pattern, value)):
+            if value.isnumeric() & (int(value) <= max_index):
+                return True
+            else:
+                return False
+        else:
+            return False
+    
+    def HexToSigned16Decimal(self,value):        # Returns Signed Decimal value from HEX string EG. FFFF = -1
+        return -(int(value,16) & 0x8000) | (int(value,16) & 0x7fff)
+
+    def byte_swap_16_bit(self, hex_string):
+        # Ensure the string is prefixed with '0x' for hex conversion
+        if not hex_string.startswith('0x'):
+            hex_string = '0x' + hex_string
+    
+        # Convert hex string to integer
+        value = int(hex_string, 16)
+        # Perform byte swapping
+        swapped_value = ((value << 8) & 0xFF00) | ((value >> 8) & 0x00FF)
+        # Convert back to hex string and return
+        return hex(swapped_value)[2:].upper().zfill(4)
+
+    def on_publish(self, client, obj, mid, reason_codes, properties):
+        pass
+
+    def on_subscribe(self, client, userdata, mid, reason_codes, properties):
+        for sub_result in reason_codes:
+            if sub_result == 1:
+                pass
+            if sub_result >= 128:
+                logger.debug("Error processing subscribe message")
+
+    def on_log(self, client, userdata, level, buf):
+        pass
+
+    def entryexit_timer(self):
+        self.publish(settings.ALARMTIMERTOPIC, self.entryexitdelay,qos=2,retain=True)
+        self.entryexitdelay -= 1
+        if self.entryexitdelay >= 0:
+            threading.Timer(1, self.entryexit_timer).start()
+
+    def publish_alarm_message(self, text, *, retain=True, qos=2, also_log=True):
+        self.publish(settings.ALARMMESSAGETOPIC, text, qos=qos, retain=retain)
+        if also_log and hasattr(self, "alarm_log"):
+            self.alarm_log.add(text, level="MSG")
+
+   
+    def readlines(self, recv_buffer=settings.BUFFER_SIZE, delim='\r'):
+        """
+        Reads lines from the Comfort serial port. Behaves like the old TCP version:
+        builds a buffer, splits on CR, yields complete lines, and treats empty reads
+        as a timeout we dont send a cc00 keepalive
+       """
+
+        buffer = ''
+        data_present = True
+
+        while data_present:
+            try:
+                # Blocking read with timeout (configured in Serial(..., timeout=TIMEOUT.seconds))
+                raw = self.serial.read(recv_buffer)
+
+            except serial.SerialException as e:
+                logger.error("Serial read error from Comfort: %s", e)
+                settings.COMFORTCONNECTED = False
+                settings.FIRST_LOGIN = True
+                # Let the outer loop handle reconnect
+                raise
+
+            # === SERIAL TIMEOUT / NO DATA (equivalent to len(data) == 0 in TCP) ===
+            if not raw:
+                # UART: empty read is normal, no keepalive required
+                continue
+
+
+            # === Normal data path ===
+            try:
+                data = raw.decode(errors="ignore")
+            except Exception:
+                data = ""
+
+            if not data:
+                # Nothing decodable in this chunk, just continue
+                continue
+
+            # Received normal data
+            buffer += data
+
+            while delim in buffer:
+                line, buffer = buffer.split(delim, 1)
+                line = line.strip()
+                if not line:
+                    continue
+
+                settings.COMFORTCONNECTED = True
+                settings.SAVEDTIME = datetime.now()
+
+                yield line
+
+        return
+
+
+
+    def SendCommand(self, command):
+
+        try:
+            self.serial.write(("\x03"+command+"\r").encode())
+            #self.serial.write((command).encode())
+            settings.SAVEDTIME = datetime.now()
+            #logger.debug("Sending Command %s", command)    # Debug sent command to Comfort.
+        except:
+            logger.error("Error sending command '%s', closing socket.", command)
+            self.comfortsock.close()
+            raise
+
+
+    def login(self):
+
+        masked = "*" * len(self.comfort_pincode)
+        logger.info("Sending Comfort login LI%s", masked)
+
+        self.serial.write(("\x03LI"+self.comfort_pincode+"\r").encode())
+        settings.COMFORTCONNECTED = True
+        if settings.BROKERCONNECTED:         # Check to see if Broker is connected. Is not always at this point in the startup.
+            self.publish(settings.ALARMCONNECTEDTOPIC, 1, qos=2, retain=True)
+        settings.SAVEDTIME = datetime.now()
+
+
+
+
+    def readcurrentstate(self):
+        
+
+        logger.info("In readcurrentstate connected = %d", self.connected)
+        if self.connected == True:
+
+            settings.device_properties['CPUType'] = 'N/A'                  # Reset CPU type to default
+
+            #get Bypassed Zones
+            logger.info("Requesting Bypassed Zones")
+            self.serial.write("\x03b?00\r".encode())       # b?00 Bypassed Zones first
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            
+            #get Comfort FileSystem
+            self.serial.write("\x03V?\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            
+            #get CPU Type
+            self.serial.write("\x03u?01\r".encode())         # Get CPU type for Main board.
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+                       
+            # #get HW model
+            self.serial.write("\x03EL\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+
+            #Used for Unique ID
+            self.serial.write("\x03UL7FF904\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            
+            #get Mainboard Serial Number
+            self.serial.write("\x03SN01\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            
+            self.serial.write("\x03M?\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            # #get all zone input states
+            self.serial.write("\x03Z?\r".encode())       # Comfort Zones/Inputs
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+
+            #get all output states
+            if ALARMNUMBEROFOUTPUTS > 0:
+                self.serial.write("\x03Y?\r".encode())
+                settings.SAVEDTIME = datetime.now()
+                time.sleep(0.1)
+
+            #get all flag states
+            self.serial.write("\x03f?00\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            #get Alarm Status Information
+            self.serial.write("\x03S?\r".encode())       # S? Status Request
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            #get Alarm Additional Information
+            self.serial.write("\x03a?\r".encode())       # a? Status Request - For Future Use !!!
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+
+            #get all sensor values. 0 - 31
+            self.serial.write("\x03r?010010\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+            self.serial.write("\x03r?011010\r".encode())
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+
+            #get all counter values
+            for i in range(0, int((settings.ALARMNUMBEROFCOUNTERS+1) / 16)):          # Counters 0 to 254 Using 256/16 = 16 iterations
+                if i == 15:
+                    self.serial.write("\x03r?00%X00F\r".encode() % (i))
+                else:
+                    self.serial.write("\x03r?00%X010\r".encode() % (i))
+                settings.SAVEDTIME = datetime.now()
+                time.sleep(0.1)
+            
+            self.publish(settings.ALARMAVAILABLETOPIC, 1,qos=2,retain=True)
+            time.sleep(0.1)
+            self.publish(settings.ALARMLWTTOPIC, 'Online',qos=2,retain=True)
+            time.sleep(0.1)
+            self.publish(settings.ALARMMESSAGETOPIC, "",qos=2,retain=True)       # Empty string removes topic.
+            time.sleep(0.1)
+
+            settings.device_properties['BatteryVoltageMain'] = "-1"
+            settings.device_properties['BatteryVoltageSlave1'] = "-1"
+            settings.device_properties['BatteryVoltageSlave2'] = "-1"
+            settings.device_properties['BatteryVoltageSlave3'] = "-1"
+            settings.device_properties['BatteryVoltageSlave4'] = "-1"
+            settings.device_properties['BatteryVoltageSlave5'] = "-1"
+            settings.device_properties['BatteryVoltageSlave6'] = "-1"
+            settings.device_properties['BatteryVoltageSlave7'] = "-1"
+            settings.device_properties['ChargeVoltageMain'] = "-1"
+            settings.device_properties['ChargeVoltageSlave1'] = "-1"
+            settings.device_properties['ChargeVoltageSlave2'] = "-1"
+            settings.device_properties['ChargeVoltageSlave3'] = "-1"
+            settings.device_properties['ChargeVoltageSlave4'] = "-1"
+            settings.device_properties['ChargeVoltageSlave5'] = "-1"
+            settings.device_properties['ChargeVoltageSlave6'] = "-1"
+            settings.device_properties['ChargeVoltageSlave7'] = "-1"
+            settings.device_properties['ChargerStatus'] = "N/A"
+            settings.device_properties['BatteryStatus'] = "N/A"
+
+            if settings.BROKERCONNECTED and settings.COMFORTCONNECTED:
+                self.publish(settings.ALARMCONNECTEDTOPIC, 1,qos=2,retain=True)
+                time.sleep(0.1)
+                self.UpdateBatteryStatus()
+
+    def UpdateBatteryStatus(self):
+
+
+
+        discoverytopic = settings.DOMAIN + "/alarm/battery_status"
+        MQTT_MSG=json.dumps({"BatteryStatus": str(settings.device_properties['BatteryStatus']),
+                             "DCSupplyStatus": str(settings.device_properties['ChargerStatus']),
+                             "BatteryMain": str(settings.device_properties['BatteryVoltageMain']),
+                             "BatterySlave1": str(settings.device_properties['BatteryVoltageSlave1']),
+                             "BatterySlave2": str(settings.device_properties['BatteryVoltageSlave2']),
+                             "BatterySlave3": str(settings.device_properties['BatteryVoltageSlave3']),
+                             "BatterySlave4": str(settings.device_properties['BatteryVoltageSlave4']),
+                             "BatterySlave5": str(settings.device_properties['BatteryVoltageSlave5']),
+                             "BatterySlave6": str(settings.device_properties['BatteryVoltageSlave6']),
+                             "BatterySlave7": str(settings.device_properties['BatteryVoltageSlave7']),
+                             "DCSupplyMain": str(settings.device_properties['ChargeVoltageMain']),
+                             "DCSupplySlave1": str(settings.device_properties['ChargeVoltageSlave1']),
+                             "DCSupplySlave2": str(settings.device_properties['ChargeVoltageSlave2']),
+                             "DCSupplySlave3": str(settings.device_properties['ChargeVoltageSlave3']),
+                             "DCSupplySlave4": str(settings.device_properties['ChargeVoltageSlave4']),
+                             "DCSupplySlave5": str(settings.device_properties['ChargeVoltageSlave5']),
+                             "DCSupplySlave6": str(settings.device_properties['ChargeVoltageSlave6']),
+                             "DCSupplySlave7": str(settings.device_properties['ChargeVoltageSlave7']),
+                             "InstalledSlaves": int(settings.device_properties['sem_id'])
+                            })
+        self.publish(discoverytopic, MQTT_MSG,qos=2,retain=False)
+        time.sleep(0.1)
+
+    def UpdateDeviceInfo(self, _file = False):
+
+        #option = parser.parse_args()
+        #COMFORT_BATTERY_STATUS_ID=option.comfort_battery_update
+        global MQTT_DEVICE_COMFORT
+        
+        file_exists = _file
+  
+        if ADDON_SLUG.strip() == "":
+            MQTT_DEVICE = { "name": "Cytech Comfort MQTT",
+                            "identifiers": ["cytech_comfort_mqtt"],
+                            "manufacturer": "Cytech Technology Pte Ltd",
+                            "sw_version": ADDON_VERSION,
+                            "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                            "model": "Comfort"
+                          }
+        else:
+            MQTT_DEVICE = { "name": "Cytech Comfort MQTT",
+                            "identifiers": ["cytech_comfort_mqtt"],
+                            "manufacturer": "Cytech Technology Pte Ltd",
+                            "sw_version": ADDON_VERSION,
+                            "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                            "configuration_url": "homeassistant://hassio/addon/" + ADDON_SLUG + "/info",
+                            "model": "Comfort"
+                        }
+        
+        MQTT_MSG=json.dumps({"CustomerName": settings.device_properties['CustomerName'] if file_exists else None,
+                             "support_url": "https://www.cytech.biz",
+                             "Reference": settings.device_properties['Reference'] if file_exists else None,
+                             "ComfortFileSystem": settings.device_properties['ComfortFileSystem'] if file_exists else None,
+                             "ComfortFirmwareType": settings.device_properties['ComfortFirmwareType'] if file_exists else None,
+                             "sw_version":str(settings.device_properties['Version']),
+                             "hw_version":str(settings.device_properties['ComfortHardwareModel']),
+                             "serial_number": settings.device_properties['SerialNumber'],
+                             "cpu_type": str(settings.device_properties['CPUType']),
+                             "InstalledSlaves": int(settings.device_properties['sem_id']),
+                             "model": settings.models[int(settings.device_properties['ComfortFileSystem'])] if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown",
+                             "BridgeConnected": str(settings.device_properties['BridgeConnected']),
+                             "device": MQTT_DEVICE
+                            })
+
+        self.publish(settings.DOMAIN, MQTT_MSG,qos=2,retain=True)
+        time.sleep(0.1)
+
+
+        discoverytopic = f"homeassistant/binary_sensor/{settings.DOMAIN}/bridge_status/config"
+        MQTT_MSG=json.dumps({"name": "Bridge MQTT Status",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "binary_sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "state_topic": settings.DOMAIN,
+                             "value_template": "{{ value_json.BridgeConnected }}",
+                             "qos": "2",
+                             "device_class": "connectivity",
+                             "payload_on": "1",
+                             "payload_off": "0",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=True)
+        time.sleep(0.1)
+
+        availability =  [
+             {
+                 "topic": settings.ALARMAVAILABLETOPIC,
+                 "payload_available": "1",
+                 "payload_not_available": "0"
+             },
+             {
+                 "topic": settings.DOMAIN,
+                 "payload_available": "1",
+                 "payload_not_available": "0",
+                 "value_template": "{{ value_json.BridgeConnected }}"
+             }
+            ]
+        discoverytopic = f"homeassistant/button/{settings.DOMAIN}/refresh/config"
+        MQTT_MSG=json.dumps({"name": "Refresh",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "button."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability": availability,
+                             "availability_mode": "all",
+                             "command_topic": settings.REFRESHTOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "payload_press": settings.COMFORT_KEY,
+                             "icon":"mdi:refresh",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+        time.sleep(0.1)
+        
+        discoverytopic = f"homeassistant/button/{settings.DOMAIN}/battery_update/config"
+        MQTT_MSG=json.dumps({"name": "Battery Update",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "button."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability": availability,
+                             "availability_mode": "all",
+                             "command_topic": settings.BATTERYREFRESHTOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "payload_press": str(settings.COMFORT_BATTERY_STATUS_ID),
+                             "icon":"mdi:battery-sync-outline",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                            })
+        if settings.device_properties['CPUType'] != "N/A":
+            self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+            time.sleep(0.1)
+
+        MQTT_DEVICE = { "name": settings.models[int(settings.device_properties['ComfortFileSystem'])] if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown",
+                            "identifiers": ["comfort_device"],
+                            "manufacturer":"Cytech Technology Pte Ltd",
+                            "hw_version":str(settings.device_properties['ComfortHardwareModel']),
+                            "serial_number": settings.device_properties['SerialNumber'],
+                            "sw_version":str(settings.device_properties['Version']),
+                            "model": settings.device_properties['ComfortHardwareModel'],
+                            "via_device": "cytech_comfort_mqtt"
+                        }
+        # Store the Comfort device dict for reload/discovery republish
+        MQTT_DEVICE_COMFORT = MQTT_DEVICE
+
+        self.MQTT_DEVICE_COMFORT = MQTT_DEVICE
+        
+        # Publish Input discovery entities under the Comfort device  # Cytech26
+        if not getattr(self, "_inputs_discovery_published", False):
+            self.publish_input_discovery(MQTT_DEVICE_COMFORT)
+            self._inputs_discovery_published = True
+
+        # Publish Output discovery entities under the Comfort device
+        if not getattr(self, "_outputs_discovery_published", False):
+            self.publish_output_discovery(MQTT_DEVICE_COMFORT)
+            self._outputs_discovery_published = True
+
+        # Publish Flag discovery entities under the Comfort device
+        if not getattr(self, "_flags_discovery_published", False):
+            self.publish_flag_discovery(MQTT_DEVICE_COMFORT)
+            self._flags_discovery_published = True
+
+        # Publish Counter discovery entities under the Comfort device
+        if not getattr(self, "_counters_discovery_published", False):
+            self.publish_counter_discovery(MQTT_DEVICE_COMFORT)
+            self._counters_discovery_published = True
+
+        # Publish Sensor discovery entities under the Comfort device
+        if not getattr(self, "_sensors_discovery_published", False):
+            self.publish_sensor_discovery(MQTT_DEVICE_COMFORT)
+            self._sensors_discovery_published = True
+
+         # Publish Timer discovery entities under the Comfort device
+        if not getattr(self, "_timers_discovery_published", False):
+            self.publish_timer_discovery(MQTT_DEVICE_COMFORT)
+            self._timers_discovery_published = True
+
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_state/config"
+        MQTT_MSG=json.dumps({"name": "State",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "state_topic": settings.ALARMSTATUSTOPIC,
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "icon":"mdi:shield-alert",
+                             "qos": "2",
+                             "native_value": "string",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=True)
+        time.sleep(0.1)
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_firmware/config"
+        MQTT_MSG=json.dumps({"name": "Firmware",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.DOMAIN,
+                             "value_template": "{{ value_json.sw_version }}",
+                             "entity_category": "diagnostic",
+                             "native_value": "string",
+                             "icon":"mdi:chip",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                        })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+        time.sleep(0.1)
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_filesystem/config"
+        MQTT_MSG=json.dumps({"name": "FileSystem",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.DOMAIN,
+                             "value_template": "{{ value_json.ComfortFileSystem }}",
+                             "entity_category": "diagnostic",
+                             "native_value": "int",
+                             "icon":"mdi:file-chart",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                        })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+        time.sleep(0.1)
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/battery_status/config"
+        MQTT_MSG=json.dumps({"name": "Battery/Charger Status",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.DOMAIN+"/alarm/battery_status",
+                             "value_template": "{{ value_json.BatteryStatus }}",
+                             "json_attributes_topic": settings.DOMAIN+"/alarm/battery_status",
+                             "json_attributes_template": '''
+                                {% set data = value_json %}
+                                {% set slaves = data['InstalledSlaves'] %}
+                                {% set ns = namespace(dict_items='') %}
+                                {% for key, value in data.items() %}
+                                    {% if 'BatteryMain' in key or ('BatterySlave' in key and key[-1:] | int <= slaves) %}
+                                        {% if ns.dict_items %}
+                                            {% set ns.dict_items = ns.dict_items + ', "' ~ key ~ '":"' ~ value ~ '"' %}
+                                        {% else %}
+                                            {% set ns.dict_items = '"' ~ key ~ '":"' ~ value ~ '"' %}
+                                        {% endif %}
+                                    {% endif %}
+                                {% endfor %}
+                                {% set dict_str = '{' ~ ns.dict_items ~ '}' %}
+                                {% set result = dict_str | from_json %}
+                                {{ result | tojson }}
+                                ''',
+                             "entity_category": "diagnostic",
+                             "icon":"mdi:battery-check",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                        })
+        if settings.device_properties['CPUType'] != "N/A":
+            self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+            time.sleep(0.1)
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/charger_status/config"
+        MQTT_MSG=json.dumps({"name": "DC Supply Status",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.DOMAIN+"/alarm/battery_status",
+                             "value_template": "{{ value_json.DCSupplyStatus }}",
+                             "json_attributes_topic": settings.DOMAIN+"/alarm/battery_status",
+                             "json_attributes_template": '''
+                                {% set data = value_json %}
+                                {% set slaves = data['InstalledSlaves'] %}
+                                {% set ns = namespace(dict_items='') %}
+                                {% for key, value in data.items() %}
+                                    {% if 'DCSupplyMain' in key or ('DCSupplySlave' in key and key[-1:] | int <= slaves) %}
+                                        {% if ns.dict_items %}
+                                            {% set ns.dict_items = ns.dict_items + ', "' ~ key ~ '":"' ~ value ~ '"' %}
+                                        {% else %}
+                                            {% set ns.dict_items = '"' ~ key ~ '":"' ~ value ~ '"' %}
+                                        {% endif %}
+                                    {% endif %}
+                                {% endfor %}
+                                {% set dict_str = '{' ~ ns.dict_items ~ '}' %}
+                                {% set result = dict_str | from_json %}
+                                {{ result | tojson }}
+                                ''',
+                             "entity_category": "diagnostic",
+                             "icon":"mdi:battery-charging",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                        })
+        if settings.device_properties['CPUType'] != "N/A":
+            self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+            time.sleep(0.1)
+            #logging.debug(MQTT_MSG)
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_bypass_zones/config"
+        MQTT_MSG=json.dumps({"name": "Bypassed Zones",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "state_topic": settings.ALARMBYPASSTOPIC,
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "icon":"mdi:shield-remove",
+                             "qos": "2",
+                             "native_value": "string",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+        time.sleep(0.1)
+
+        #Mode_Description = {0:"Disarmed", 1:"Away Mode", 2:"Night Mode", 3:"Day Mode", 4:"Vacation Mode"}
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_mode/config"
+        MQTT_MSG=json.dumps({"name": "Mode",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.ALARMMODETOPIC,
+                             "icon":"mdi:home",
+                             "device": MQTT_DEVICE
+                        })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=True)
+        time.sleep(0.1)
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_customername/config"
+        MQTT_MSG=json.dumps({"name": "Customer Name",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.DOMAIN,
+                             "value_template": "{{ value_json.CustomerName }}",
+                             "entity_category": "diagnostic",
+                             "native_value": "string",
+                             "icon":"mdi:shield-account",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+        time.sleep(0.1)
+
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_reference/config"
+        MQTT_MSG=json.dumps({"name": "Reference",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.DOMAIN,
+                             "value_template": "{{ value_json.Reference }}",
+                             "entity_category": "diagnostic",
+                             "native_value": "string",
+                             "icon":"mdi:home-circle",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+        time.sleep(0.1)
+        
+        discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_serial_number/config"
+        MQTT_MSG=json.dumps({"name": "Serial Number",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "availability_topic": settings.ALARMAVAILABLETOPIC,
+                             "payload_available": "1",
+                             "payload_not_available": "0",
+                             "state_topic": settings.DOMAIN,
+                             "value_template": "{{ value_json.serial_number }}",
+                             "entity_category": "diagnostic",
+                             "native_value": "string",
+                             "icon":"mdi:numeric",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
+        time.sleep(0.1)
+
+
+        discoverytopic = f"homeassistant/binary_sensor/{settings.DOMAIN}/comfort_connection_state/config"
+        MQTT_MSG=json.dumps({"name": "LAN Status",
+                             "unique_id": settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "default_entity_id": "sensor."+settings.DOMAIN+"_"+discoverytopic.split('/')[3],
+                             "state_topic": settings.ALARMCONNECTEDTOPIC,
+                             "device_class": "connectivity",
+                             "entity_category": "diagnostic",
+                             "payload_off": "0",
+                             "payload_on": "1",
+                             "qos": "2",
+                             "device": MQTT_DEVICE
+                            })
+        self.publish(discoverytopic, MQTT_MSG, qos=2, retain=True)
+        time.sleep(0.1)
+
+    def BatteryStatus(*voltages):  # Tuple of all voltages
+        for voltage in voltages:
+            if voltage > 15:        # Critical Overcharge
+                return "Critical"
+            if voltage > 14.6:      # Overcharge
+                return "Warning"
+            if voltage <= 9.5:     # Discharged/Crital Charge or No Charge
+                return "Critical"
+            elif voltage < 11.5:   # Severely Discharged/Low Charge
+                return "Warning"
+        return "Ok"
+
+#        Example usage with 5 battery voltages
+#           battery_voltages = [13.0, 12.1, 12.8, 13.5, 14.2]                          # Test
+#           print(battery_status(*battery_voltages))  # Output will be "Critical"      # Test
+    
+    def setdatetime(self):
+
+        if self.connected == True:  #set current date and time if COMFORT_TIME Flag is set to True
+            if settings.COMFORT_TIME == 'True':
+                logger.info('Setting Comfort Date/Time')
+                now = datetime.now()
+                self.serial.write(("\x03DT%02d%02d%02d%02d%02d%02d\r" % (now.year, now.month, now.day, now.hour, now.minute, now.second)).encode())
+                settings.SAVEDTIME = datetime.now()
+                time.sleep(0.1)
+
+    def check_string(self, s):
+
+        pattern = re.compile(r'(\x03[a-zA-Z0-9!?]*)$')
+        match = re.search(pattern, s)
+    
+        if match:
+            return True
+        else:
+            return False
+
+    def exit_gracefully(self, signum, frame):
+        
+        logger.debug("SIGNUM: %s received, Shutting down.", str(signum))
+        
+        settings.device_properties['BridgeConnected'] = 0
+        if self.connected == True:
+            self.serial.write("\x03LI\r".encode()) #Logout command.
+            settings.SAVEDTIME = datetime.now()
+            self.connected = False
+        if settings.BROKERCONNECTED == True:      # MQTT Connected
+            infot = self.publish(settings.ALARMCONNECTEDTOPIC, 0,qos=2,retain=True)
+            infot = self.publish(settings.ALARMAVAILABLETOPIC, 0,qos=2,retain=True)
+            infot = self.publish(settings.ALARMLWTTOPIC, 'Offline',qos=2,retain=True)
+
+            if ADDON_SLUG.strip() == "":
+                           MQTT_DEVICE = { "name": "Cytech Comfort MQTT",
+                            "identifiers": ["cytech_comfort_mqtt"],
+                            "manufacturer": "Cytech Technology Pte Ltd",
+                            "sw_version": ADDON_VERSION,
+                            "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                            "model": "Comfort"
+                          }
+            else:
+                          MQTT_DEVICE = { "name": "Cytech Comfort MQTT",
+                                          "identifiers": ["cytech_comfort_mqtt"],
+                                          "manufacturer": "Cytech Technology Pte Ltd",
+                                          "sw_version": ADDON_VERSION,
+                                          "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                                          "configuration_url": "homeassistant://hassio/addon/" + ADDON_SLUG + "/info",
+                                          "model": "Comfort"
+                                        }
+
+            MQTT_MSG=json.dumps({"CustomerName": settings.device_properties['CustomerName'] if settings.file_exists else None,
+                             "support_url": "https://www.cytech.biz",
+                             "Reference": settings.device_properties['Reference'] if settings.file_exists else None,
+                             "ComfortFileSystem": settings.device_properties['ComfortFileSystem'] if settings.file_exists else None,
+                             "ComfortFirmwareType": settings.device_properties['ComfortFirmwareType'] if settings.file_exists else None,
+                             "sw_version":str(settings.device_properties['Version']),
+                             "hw_version":str(settings.device_properties['ComfortHardwareModel']),
+                             "serial_number": settings.device_properties['SerialNumber'],
+                             "cpu_type": str(settings.device_properties['CPUType']),
+                             "InstalledSlaves": int(settings.device_properties['sem_id']),
+                             "model": settings.models[int(settings.device_properties['ComfortFileSystem'])] if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown",
+                             "BridgeConnected": str(settings.device_properties['BridgeConnected']),
+                             "device": MQTT_DEVICE
+                            })
+            infot = self.publish(settings.DOMAIN, MQTT_MSG,qos=2,retain=False)
+            infot.wait_for_publish()
+
+            discoverytopic = settings.DOMAIN + "/alarm/battery_status"
+            MQTT_MSG=json.dumps({"BatteryStatus": str(settings.device_properties['BatteryStatus']),
+                             "DCSupplyStatus": str(settings.device_properties['ChargerStatus']),
+                             "BatteryMain": str(settings.device_properties['BatteryVoltageMain']),
+                             "BatterySlave1": str(settings.device_properties['BatteryVoltageSlave1']),
+                             "BatterySlave2": str(settings.device_properties['BatteryVoltageSlave2']),
+                             "BatterySlave3": str(settings.device_properties['BatteryVoltageSlave3']),
+                             "BatterySlave4": str(settings.device_properties['BatteryVoltageSlave4']),
+                             "BatterySlave5": str(settings.device_properties['BatteryVoltageSlave5']),
+                             "BatterySlave6": str(settings.device_properties['BatteryVoltageSlave6']),
+                             "BatterySlave7": str(settings.device_properties['BatteryVoltageSlave7']),
+                             "DCSupplyMain": str(settings.device_properties['ChargeVoltageMain']),
+                             "DCSupplySlave1": str(settings.device_properties['ChargeVoltageSlave1']),
+                             "DCSupplySlave2": str(settings.device_properties['ChargeVoltageSlave2']),
+                             "DCSupplySlave3": str(settings.device_properties['ChargeVoltageSlave3']),
+                             "DCSupplySlave4": str(settings.device_properties['ChargeVoltageSlave4']),
+                             "DCSupplySlave5": str(settings.device_properties['ChargeVoltageSlave5']),
+                             "DCSupplySlave6": str(settings.device_properties['ChargeVoltageSlave6']),
+                             "DCSupplySlave7": str(settings.device_properties['ChargeVoltageSlave7']),
+                             "InstalledSlaves": int(settings.device_properties['sem_id'])
+                            })
+            infot = self.publish(discoverytopic, MQTT_MSG,qos=2,retain=False)
+            infot.wait_for_publish()
+
+        settings.RUN = False
+        exit(0)
+
+
+    def add_descriptions(self, file):
+
+        res = parse_cclx(
+            file_path=file,
+            device_properties_in=settings.device_properties,
+            check_zone_name=self.CheckZoneNameFormat,
+            check_index_number=self.CheckIndexNumberFormat,
+            logger=logger,
+            max_outputs=96
+        )
+
+        # Copy results back into the globals the rest of the code expects
+        settings.device_properties = res.device_properties
+        settings.input_properties = res.input_properties
+        settings.counter_properties = res.counter_properties
+        settings.flag_properties = res.flag_properties
+        settings.output_properties = res.output_properties
+        settings.sensor_properties = res.sensor_properties
+        settings.timer_properties = res.timer_properties
+        settings.user_properties = res.user_properties
+
+        settings.DEVICEMAPFILE  = res.flags.devicemap
+        settings.ZONEMAPFILE    = res.flags.zonemap
+        settings.COUNTERMAPFILE = res.flags.countermap
+        settings.FLAGMAPFILE    = res.flags.flagmap
+        settings.OUTPUTMAPFILE  = res.flags.outputmap
+        settings.SENSORMAPFILE  = res.flags.sensormap
+        settings.TIMERMAPFILE   = res.flags.timermap
+        settings.USERMAPFILE    = res.flags.usermap
+
+        return file
+
+    
+    def sanitize_filename(self, input_string, valid_extensions=None):     # Thanks ChatGPT :-)
+        """
+        Sanitize the input filename string to ensure it is a valid filename with an extension,
+        and prevent directory tree walking.
+
+        :param input_string: The user input string to sanitize.
+        :param valid_extensions: List of valid extensions (e.g., ['cclx']). None to allow any extension.
+        :return: A sanitized filename or None if invalid.
+        """
+        # Define a regular expression pattern for a valid filename (alphanumeric and specific special characters)
+        valid_filename_pattern = r'^[\w\-. ]+$'  # Alphanumeric characters, underscores, hyphens and dots. Spaces (for future development)
+    
+        # Split the filename and extension
+        base, ext = os.path.splitext(input_string)
+    
+        # Check if the base name is valid
+        if not re.match(valid_filename_pattern, base):
+            return None
+    
+        # Validate the extension if a list of valid extensions is provided
+        if valid_extensions:
+            ext = ext.lstrip('.').lower()
+            if ext not in valid_extensions:
+                return None
+    
+        # Join the base and extension back
+        sanitized_filename = f"{base}.{ext}" if ext else base
+        #sanitized_filename = f"\"{base}.{ext}\"" if ext else base
+    
+        # Ensure no directory traversal characters are present
+        if '..' in sanitized_filename or '/' in sanitized_filename or '\\' in sanitized_filename:
+            return None
+    
+        #logging.debug("Sanitized Filename: %s", sanitized_filename)
+        return sanitized_filename
+
+    def validate_hex_in_list(self, value, allow_spec):
+        """
+        value      : hex string (2 characters, e.g. '1F')
+        allow_spec : either a list of integers OR a string like '0,49-51,255'
+        returns    : True if value (as decimal) is in allowed list, else False
+        """
+
+        # If allow_spec is a string like "0,49-51,255", parse and expand it
+        if isinstance(allow_spec, str):
+            allowed = []
+            for part in allow_spec.split(","):
+                part = part.strip()
+                if "-" in part:
+                    try:
+                        start, end = map(int, part.split("-"))
+                        allowed.extend(range(start, end + 1))
+                    except ValueError:
+                        pass  # ignore malformed ranges
+                else:
+                    try:
+                        allowed.append(int(part))
+                    except ValueError:
+                        pass  # ignore invalid numbers
+        else:
+            # Already a list of integers
+            allowed = list(allow_spec)
+
+        try:
+            dec_value = int(value, 16)
+        except ValueError:
+            return False  # invalid hex string
+
+        return dec_value in allowed
+
+
+
+
+    def _reset_enrichment(self):
+        """
+        Clear CCLX-derived metadata so a reload doesn't retain stale names/descriptions.
+        Adjust these attribute names to match whatever you use in your code.
+        """
+        # Common ones you mentioned previously:
+        settings.input_properties = {}
+        settings.output_properties = {}
+        settings.counter_properties = {}
+        settings.sensor_properties = {}
+        settings.flag_properties = {}
+        settings.user_properties = {}
+        settings.timer_properties = {}
+        # Anything else add_descriptions() populates should be reset here.
+        # also clear these CCLX “flags” so publish_input_discovery uses the new file cleanly
+        settings.DEVICEMAPFILE  = False
+        settings.ZONEMAPFILE    = False
+        settings.COUNTERMAPFILE = False
+        settings.FLAGMAPFILE    = False
+        settings.OUTPUTMAPFILE  = False
+        settings.SENSORMAPFILE  = False
+        settings.TIMERMAPFILE   = False
+        settings.USERMAPFILE    = False
+
+
+    # def purge_stale_output_discovery(self, start: int = 129, end: int = 255):
+    #     """
+    #     One-time cleanup: delete retained HA discovery configs for stale outputs.
+    #     Call this once after fixing COMFORT_OUTPUTS publishing.
+    #     """
+    #     dom = settings.DOMAIN
+    #     logger.warning("PURGE outputs: domain=%s range=%d..%d", dom, start, end)
+
+    #     deleted = 0
+    #     for i in range(start, end + 1):
+    #         topic = f"homeassistant/switch/{dom}/output{i}/config"
+    #         self.publish(topic, "", qos=1, retain=True)
+    #         deleted += 1
+
+    #     logger.warning("PURGE outputs: done deleted=%d", deleted)
+
+
+
+
+    def _on_reload_message(self, msg):
+        logger.info("In _on_reload_message payload=%r retain=%r", msg.payload, getattr(msg, "retain", False))
+
+        if getattr(msg, "retain", False):
+            logger.info("Reload: ignored retained message")
+            return
+
+        now = time.monotonic()
+        if (now - self._last_reload_ts) < settings.RELOAD_COOLDOWN_SECONDS:
+            logger.warning("Reload: ignored (cooldown)")
+            return
+
+        payload_raw = (msg.payload or b"").decode("utf-8", errors="replace").strip()
+        logger.info("Reload: received payload=%r", payload_raw)
+
+        reason = None
+        key_ok = True
+
+        if payload_raw and payload_raw.lower() != "reload":
+            try:
+                data = json.loads(payload_raw)
+                reason = data.get("reason")
+                if settings.RELOAD_REQUIRE_KEY:
+                    key_ok = (data.get("key") == getattr(settings, "COMFORT_KEY", None))
+            except Exception:
+                if settings.RELOAD_REQUIRE_KEY:
+                    key_ok = False
+
+        if settings.RELOAD_REQUIRE_KEY and not key_ok:
+            logger.warning("Reload: rejected (bad key)")
+            return
+
+        # Prevent overlapping reloads (MQTT callback runs in paho thread)
+        if not self._reload_lock.acquire(blocking=False):
+            logger.warning("Reload: ignored (already in progress)")
+            return
+
+        try:
+            self._last_reload_ts = now
+            logger.warning("Reload: accepted%s", f" reason={reason!r}" if reason else "")
+            self._handle_reload_request(source="mqtt", reason=reason)
+        except Exception:
+            # Never let exceptions kill the paho network thread
+            logger.exception("Reload failed in MQTT callback")
+        finally:
+            self._reload_lock.release()
+
+
+    def _handle_reload_request(self, source: str = "mqtt", reason: str | None = None):
+        logger.warning("Reload requested via source=%s reason=%r", source, reason)
+
+        try:
+            logger.info("Clearing discovery (inputs/outputs/flags)")
+            self.clear_input_discovery()
+            self.clear_output_discovery()
+            self.clear_flag_discovery()
+            self.clear_counter_discovery()
+            self.clear_sensor_discovery()
+            self.clear_timer_discovery()
+
+
+            data_cclx = Path("/data/site.cclx")
+            logger.warning("Reload using CCLX path=%s exists=%s", data_cclx, data_cclx.exists())
+
+            if data_cclx.exists():
+                self._reset_enrichment()
+                self.add_descriptions(data_cclx)
+                self.publish_all_maps()
+
+            mqtt_device_comfort = getattr(self, "MQTT_DEVICE_COMFORT", None) or globals().get("MQTT_DEVICE_COMFORT", None)
+
+            if mqtt_device_comfort is not None:
+                logger.info("Publishing discovery (inputs/outputs/flags/counters/sensors)")
+                self.publish_input_discovery(mqtt_device_comfort)
+                self.publish_output_discovery(mqtt_device_comfort)
+                self.publish_flag_discovery(mqtt_device_comfort)
+                self.publish_counter_discovery(mqtt_device_comfort)
+                self.publish_sensor_discovery(mqtt_device_comfort)
+                self.publish_timer_discovery(mqtt_device_comfort)
+            else:
+                logger.warning("MQTT_DEVICE_COMFORT not set yet; skipping discovery publish on reload")
+
+        except Exception:
+            logger.exception("Reload failed source=%s reason=%r", source, reason)
+            raise
+
+
+    def clear_input_discovery(self):
+        max_inputs = int(settings.COMFORT_INPUTS)
+
+        for i in range(1, max_inputs + 1):
+            topic = f"homeassistant/binary_sensor/{settings.DOMAIN}/input{i:03d}/config"
+            self.publish(topic, "", qos=2, retain=True)
+            time.sleep(0.005)
+
+
+    def clear_output_discovery(self):
+        """
+        Clear retained MQTT discovery configs for:
+        - standard Comfort outputs: output1..outputN
+        - SCSRIO outputs (legacy/stale): scsriooutput1..scsriooutputN (or at least 129+)
+        """
+        max_outputs = int(getattr(settings, "MAX_OUTPUTS", 128) or 128)
+        logger.warning("DISCOVERY CLEAR outputs: domain=%s max_outputs=%d", settings.DOMAIN, max_outputs)
+
+        # Standard outputs
+        for i in range(1, max_outputs + 1):
+            topic = f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config"
+            self.publish(topic, "", qos=1, retain=True)
+            time.sleep(0.005)            
+
+        # SCSRIO outputs (these should never exist in HA UI)
+        # Clear the full range so any legacy/stale ones are removed.
+        for i in range(1, max_outputs + 1):
+            topic = f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config"
+            self.publish(topic, "", qos=1, retain=True)
+            time.sleep(0.005)
+
+
+    def clear_flag_discovery(self):
+        for i in range(1, 255):
+            topic = f"homeassistant/switch/{settings.DOMAIN}/flag{i:03d}/config"
+            self.publish(topic, "", qos=2, retain=True)
+            time.sleep(0.005)
+
+    def clear_counter_discovery(self):
+        for i in range(0, int(settings.ALARMNUMBEROFCOUNTERS)):
+            topic = f"homeassistant/number/{settings.DOMAIN}/counter{i:03d}/config"
+            self.publish(topic, "", qos=2, retain=True)
+            time.sleep(0.005)
+
+    def clear_sensor_discovery(self):
+
+        for i in range(0, int(settings.ALARMNUMBEROFSENSORS)):
+            topic = f"homeassistant/number/{settings.DOMAIN}/sensor{i:03d}/config"
+            self.publish(topic, "", qos=2, retain=True)
+            time.sleep(0.005)
+
+
+    def clear_timer_discovery(self):
+        #logging.info("clear_timer_discovery: START")
+
+        for i in range(1, settings.COMFORT_TIMERS + 1):
+            number_topic = f"homeassistant/number/{settings.DOMAIN}/timer{i:03d}/config"
+            sensor_topic = f"homeassistant/sensor/{settings.DOMAIN}/timer{i:03d}/config"
+
+            # logging.info(
+            #     "clear_timer_discovery: clearing timer=%03d number_topic=%s sensor_topic=%s",
+            #     i, number_topic, sensor_topic
+            # )
+
+            self.publish(number_topic, "", qos=2, retain=True)
+            self.publish(sensor_topic, "", qos=2, retain=True)
+            time.sleep(0.005)
+
+        #logging.info("clear_timer_discovery: END")
+
+
+    def _ha_discovery_topic(self, component: str, object_id: str) -> str:
+        # Example: homeassistant/sensor/cytech_comfort_mqtt/counter244/config
+        return f"homeassistant/{component}/{settings.DOMAIN}/{object_id}/config"
+
+    def _publish_discovery(self, topic: str, payload: dict, retain: bool = True):
+        self.publish(topic, json.dumps(payload), qos=2, retain=retain)
+
+    def _clear_discovery(self, topic: str):
+        # MQTT Discovery deletion: publish empty retained payload
+        self.publish(topic, "", qos=2, retain=True)
+
+    def _availability_block(self) -> dict:
+        # Keep this consistent across all entities
+        return {
+            "availability_topic": settings.ALARMONLINETOPIC,
+            "payload_available": "1",
+            "payload_not_available": "0",
+        }
+
+    def _device_block(self) -> dict:
+        # Use your existing MQTT_DEVICE if you already have it
+        return MQTT_DEVICE_COMFORT
+
+
+    ####  MQTT Discovery for Inputs, Outputs, Flags, Counters, Timers and Users ####
+
+    def publish_output_discovery(self, mqtt_device):
+        # Output states are simple numeric strings: "0" or "1"
+
+        try:
+            max_outputs = int(getattr(settings, "COMFORT_OUTPUTS", 0) or 0)
+            logger.info("publish_output_discovery: COMFORT_OUTPUTS is %r ",
+                        getattr(settings, "COMFORT_OUTPUTS", None))
+        except Exception:
+            max_outputs = 0
+
+        if max_outputs <= 0:
+            logger.warning("publish_output_discovery: COMFORT_OUTPUTS is %r; no outputs will be published",
+                        getattr(settings, "COMFORT_OUTPUTS", None))
+            return
+
+
+        for i in range(1, max_outputs + 1):
+            props_str = settings.output_properties.get(str(i))
+            props_int = settings.output_properties.get(i)
+            props = settings.output_properties.get(str(i), settings.output_properties.get(i, {}))
+
+            # logger.info(
+            #     "publish_output_discovery: output=%s props_str=%r props_int=%r chosen=%r",
+            #     i, props_str, props_int, props
+            # )
+
+            if isinstance(props, dict):
+                name = (props.get("Name") or props.get("name") or f"Output{i:03d}").strip()
+            elif isinstance(props, str):
+                name = props.strip() or f"Output{i}"
+            else:
+                name = f"Output{i}"
+
+            # logger.info(
+            #     "publish_output_discovery: output=%s resolved_name=%r discovery_topic=%s",
+            #     i, name, f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config"
+            # )
+
+
+
+            state_topic = settings.ALARMOUTPUTTOPIC % i
+            command_topic = settings.ALARMOUTPUTCOMMANDTOPIC % i
+            discovery_topic = f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config"
+
+            payload = {
+                "name": name,
+                "unique_id": f"{settings.DOMAIN}_output{i:03d}",
+                "object_id": f"{settings.DOMAIN}_output{i:03d}",
+                "state_topic": state_topic,
+                "command_topic": command_topic,
+                "payload_on": "1",
+                "payload_off": "0",
+                "state_on": "1",
+                "state_off": "0",
+                "icon": "mdi:flash",
+                "availability": [
+                    {
+                        "topic": settings.ALARMAVAILABLETOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                    {
+                        "topic": settings.ALARMCONNECTEDTOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                ],
+                "availability_mode": "all",
+                "device": mqtt_device,
+            }
+
+            self.publish(discovery_topic, json.dumps(payload), qos=1, retain=True)
+            time.sleep(0.05)
+
+
+    def publish_input_discovery(self, mqtt_device):
+        max_inputs = int(settings.COMFORT_INPUTS)
+
+        for i in range(1, max_inputs + 1):
+            name = f"Zone{i}"
+            device_class = None
+
+            if settings.ZONEMAPFILE:
+                props = settings.input_properties.get(str(i))
+                if props:
+                    name = props.get("Name") or name
+
+            state_topic = settings.ALARMINPUTTOPIC % i
+            discovery_topic = f"homeassistant/binary_sensor/{settings.DOMAIN}/input{i:03d}/config"
+
+            payload = {
+                "name": name,
+                "unique_id": f"{settings.DOMAIN}_input{i:03d}",
+                "object_id": f"{settings.DOMAIN}_input{i:03d}",
+                "state_topic": state_topic,
+                "payload_on": "1",
+                "payload_off": "0",
+                "availability": [
+                    {
+                        "topic": settings.ALARMAVAILABLETOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                    {
+                        "topic": settings.ALARMCONNECTEDTOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                ],
+                "availability_mode": "all",
+                "device": mqtt_device,
+            }
+
+            if device_class:
+                payload["device_class"] = device_class
+
+            self.publish(discovery_topic, json.dumps(payload), qos=1, retain=True)
+            time.sleep(0.05)
+
+
+    def publish_flag_discovery(self, mqtt_device):
+        for key, value in settings.flag_properties.items():
+            try:
+                i = int(key)
+            except ValueError:
+                continue
+
+            # logger.info(
+            #     "publish_flag_discovery: raw key=%r value=%r type=%s",
+            #     key, value, type(value).__name__
+            # )
+
+
+            if isinstance(value, dict):
+                flag_name = (value.get("Name") or value.get("name") or f"Flag{i:03d}").strip()
+            elif isinstance(value, str):
+                flag_name = value.strip() or f"Flag{i:03d}"
+            else:
+                flag_name = f"Flag{i:03d}"
+
+            # logger.info(
+            #     "publish_flag_discovery: flag=%s resolved_name=%r discovery_topic=%s",
+            #     i, flag_name, f"homeassistant/switch/{settings.DOMAIN}/flag{i:03d}/config"
+            # )
+                
+            state_topic = settings.ALARMFLAGTOPIC % i
+            command_topic = settings.ALARMFLAGCOMMANDTOPIC % i
+            discovery_topic = f"homeassistant/switch/{settings.DOMAIN}/flag{i:03d}/config"
+
+            mqtt_msg = json.dumps({
+                "name": flag_name,
+                "unique_id": f"{settings.DOMAIN}_flag{i:03d}",
+                "object_id": f"{settings.DOMAIN}_flag{i:03d}",
+                "state_topic": state_topic,
+                "command_topic": command_topic,
+                "payload_on": "1",
+                "payload_off": "0",
+                "state_on": "1",
+                "state_off": "0",
+                "availability": [
+                    {
+                        "topic": settings.ALARMAVAILABLETOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                    {
+                        "topic": settings.ALARMCONNECTEDTOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                ],
+                "availability_mode": "all",
+                "icon": "mdi:flag",
+                "device": mqtt_device,
+            })
+
+            self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
+            time.sleep(0.01)
+
+
+    def publish_counter_discovery(self, mqtt_device):
+        for key, value in settings.counter_properties.items():
+            try:
+                i = int(key)
+            except ValueError:
+                continue
+
+            # logger.info(
+            #     "publish_counter_discovery: raw key=%r value=%r type=%s",
+            #     key, value, type(value).__name__
+            # )
+
+            if isinstance(value, dict):
+                counter_name = (value.get("Name") or value.get("name") or f"Counter{i:03d}").strip()
+            elif isinstance(value, str):
+                counter_name = value.strip() or f"Counter{i:03d}"
+            else:
+                counter_name = f"Counter{i:03d}"
+
+            discovery_topic = f"homeassistant/number/{settings.DOMAIN}/counter{i:03d}/config"
+            state_topic = settings.ALARMCOUNTERTOPIC % i
+            command_topic = settings.ALARMCOUNTERCOMMANDTOPIC % i
+
+            # logger.info(
+            #     "publish_counter_discovery: counter=%s resolved_name=%r discovery_topic=%s state_topic=%s command_topic=%s",
+            #     i, counter_name, discovery_topic, state_topic, command_topic
+            # )
+
+            mqtt_msg = json.dumps({
+                "name": counter_name,
+                "unique_id": f"{settings.DOMAIN}_counter{i:03d}",
+                "object_id": f"{settings.DOMAIN}_counter{i:03d}",
+                "state_topic": state_topic,
+                "command_topic": command_topic,
+                "value_template": "{{ value }}",
+                "command_template": "{{ value }}",
+                "availability": [
+                    {
+                        "topic": settings.ALARMAVAILABLETOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                    {
+                        "topic": settings.ALARMCONNECTEDTOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                ],
+                "availability_mode": "all",
+                "mode": "box",
+                "min": -32768,
+                "max": 32767,
+                "step": 1,
+                "icon": "mdi:counter",
+                "device": mqtt_device,
+            })
+
+            self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
+            time.sleep(0.01)
+
+
+    def publish_sensor_discovery(self, mqtt_device):
+        for key, value in settings.sensor_properties.items():
+            try:
+                i = int(key)
+            except ValueError:
+                continue
+
+            # logger.info(
+            #     "publish_sensor_discovery: raw key=%r value=%r type=%s",
+            #     key, value, type(value).__name__
+            # )
+
+            if isinstance(value, dict):
+                sensor_name = (value.get("Name") or value.get("name") or f"Sensor{i:03d}").strip()
+            elif isinstance(value, str):
+                sensor_name = value.strip() or f"Sensor{i:03d}"
+            else:
+                sensor_name = f"Sensor{i:03d}"
+
+            discovery_topic = f"homeassistant/number/{settings.DOMAIN}/sensor{i:03d}/config"
+            state_topic = settings.ALARMSENSORTOPIC % i
+            command_topic = settings.ALARMSENSORCOMMANDTOPIC % i
+
+            # logger.info(
+            #     "publish_sensor_discovery: sensor=%s resolved_name=%r discovery_topic=%s state_topic=%s command_topic=%s",
+            #     i, sensor_name, discovery_topic, state_topic, command_topic
+            # )
+
+            mqtt_msg = json.dumps({
+                "name": sensor_name,
+                "unique_id": f"{settings.DOMAIN}_sensor{i:03d}",
+                "object_id": f"{settings.DOMAIN}_sensor{i:03d}",
+                "state_topic": state_topic,
+                "command_topic": command_topic,
+                "value_template": "{{ value }}",
+                "command_template": "{{ value }}",
+                "availability": [
+                    {
+                        "topic": settings.ALARMAVAILABLETOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                    {
+                        "topic": settings.ALARMCONNECTEDTOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                ],
+                "availability_mode": "all",
+                "mode": "box",
+                "min": -32768,
+                "max": 32767,
+                "step": 1,
+                "icon": "mdi:gauge",
+                "device": mqtt_device,
+            })
+
+            self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
+            time.sleep(0.01)
+
+
+    def publish_timer_discovery(self, mqtt_device):
+
+        for key, value in settings.timer_properties.items():
+     
+            try:
+                i = int(key)
+            except ValueError:
+                logging.warning("publish_timer_discovery: skipping non-integer key=%r", key)
+                continue
+
+            if isinstance(value, dict):
+                timer_name = (value.get("Name") or value.get("name") or f"Timer{i:03d}").strip()
+            elif isinstance(value, str):
+                timer_name = value.strip() or f"Timer{i:03d}"
+            else:
+                timer_name = f"Timer{i:03d}"
+
+            discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/timer{i:03d}/config"
+            state_topic = settings.COMFORTTIMERSTOPIC % i
+
+            mqtt_msg = json.dumps({
+                "name": timer_name,
+                "unique_id": f"{settings.DOMAIN}_timer{i:03d}",
+                "object_id": f"{settings.DOMAIN}_timer{i:03d}",
+                "state_topic": state_topic,
+                "availability": [
+                    {
+                        "topic": settings.ALARMAVAILABLETOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                    {
+                        "topic": settings.ALARMCONNECTEDTOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                ],
+                "availability_mode": "all",
+                "icon": "mdi:timer-outline",
+                "device": mqtt_device,
+            })
+
+            # logging.info(
+            #     "publish_timer_discovery: publishing timer=%03d name=%r discovery_topic=%s state_topic=%s",
+            #     i, timer_name, discovery_topic, state_topic
+            # )
+            # logging.debug("publish_timer_discovery: payload=%s", mqtt_msg)
+
+            self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
+            time.sleep(0.01)
+
+
+
+    def run(self):
+
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+        if os.name != 'nt':
+            signal.signal(signal.SIGQUIT, self.exit_gracefully)
+
+        # Select the production active file written by the ingress UI
+        # If that is missing, look for a CCLX file in the /data directory (for development/testing)
+        data_cclx = Path("/data/site.cclx")
+
+        if data_cclx.exists():
+            logger.info("Loading CCLX enrichment from %s", data_cclx)
+            self.add_descriptions(data_cclx)
+
+        elif settings.COMFORT_CCLX_FILE is not None:
+            config_filename = self.sanitize_filename(settings.COMFORT_CCLX_FILE, "cclx")
+            if config_filename:
+                cfg = Path("/config/" + config_filename)
+                logger.info("Loading CCLX enrichment from %s", cfg)
+                self.add_descriptions(cfg)
+            else:
+                logger.info("Illegal Configurator CCLX filename detected, no enrichment will be loaded.")
+        else:
+            logger.info("No CCLX file configured, no enrichment will be loaded.")
+
+        
+        self.connect_async(self.mqtt_ip, self.mqtt_port, 60)
+        if self.connected == True:
+            settings.BROKERCONNECTED = True
+            settings.device_properties['BridgeConnected'] = 1
+            self.publish(settings.ALARMAVAILABLETOPIC, 0,qos=2,retain=True)
+            self.will_set(settings.ALARMLWTTOPIC, payload="Offline", qos=2, retain=True)
+
+        self.loop_start()   
+
+        try:
+            while settings.RUN:
+                
+               
+                self.serial = None # Added 17/11/2025
+                try:
+                    logger.info("Opening Comfort serial port %s @ %d baud", "/dev/serial0", 115200)
+                    self.serial = LoggedSerial(port='/dev/serial0', baudrate=115200, timeout=settings.TIMEOUT.seconds)
+
+                    #self.serial.write(b"DEBUG: Comfort addon started\r\n")
+                    #self.serial.flush()
+
+                    self.login()
+
+                    settings.SAVEDTIME = datetime.now()      # Added 29/4/2025
+
+                    for line in self.readlines():
+
+
+                        pattern = re.compile(r'(\x03[a-zA-Z0-9!?]*)$')      # Extract 'legal' characters from line.
+                        match = re.search(pattern, line)
+                        if match:
+                            line = match.group(1)
+                        else:
+                            continue
+
+                        if line[1:] != "cc00": #and not line[1:].startswith("D?00"):      # D?00 replies might not be used - wait Cytech command inclusion.
+                            logger.debug(line[1:])  	    # Print all responses in DEBUG mode only. Print all received Comfort commands except keepalives.
+
+                            if datetime.now() > settings.SAVEDTIME + settings.TIMEOUT:            #
+                                self.serial.write("\x03cc00\r".encode()) #echo command for keepalive
+                                settings.SAVEDTIME = datetime.now()
+                                time.sleep(0.1)
+
+                        if self.check_string(line):         # Check for "(\x03[a-zA-Z0-9]*)$" in complete line. Might be redundant as same check done above.
+                            pattern = re.compile(r'(\x03[a-zA-Z0-9!?]*)$')      # Extract 'legal' characters from line.
+                            match = re.search(pattern, line)
+
+                            if match:
+                                line = match.group(1)
+                            else:
+                                continue
+
+                            if line[1:3] == "LU":
+                                luMsg = ComfortLUUserLoggedIn(line[1:])
+                                if luMsg.user != 0:
+                                    logger.info('Comfort Login Ok - User %s', (luMsg.user if luMsg.user != 254 else 'Engineer'))
+
+                                    if settings.BROKERCONNECTED == True:     # Settle time for Comfort.
+                                        time.sleep(1)
+                                    else:
+                                        logger.info("Waiting for MQTT Broker to come Online...")
+                                    
+
+                                    logger.info("Setting self.connected = True")
+                                    self.connected = True  
+                                    logger.info("Calling ALARMCOMMANDTOPIC, comm test")
+                                   
+                                    self.publish(settings.ALARMCOMMANDTOPIC, "comm test", qos=2,retain=True)
+                                    time.sleep(0.01)
+                                    logger.info("calling REFRESHTOPIC")
+                                    self.publish(settings.REFRESHTOPIC, "", qos=2,retain=True)               # Clear Refresh Key
+                                    time.sleep(0.01)
+
+                                    self.setdatetime()      # Set Date/Time if Option is enabled
+                                    logger.info("FIRST_LOGIN = %x", settings.FIRST_LOGIN)
+                                    if settings.FIRST_LOGIN == True:
+                                        logger.info("Login - reading current state from Comfort...")
+                                        self.readcurrentstate()
+                                        settings.FIRST_LOGIN = False
+                                else:
+                                    logger.debug("Disconnect (LU00) Received from Comfort.")
+                                    settings.FIRST_LOGIN = True
+                                    settings.COMFORTCONNECTED = False
+                                    if settings.BROKERCONNECTED == True:      # MQTT Connected ??
+                                        self.publish(settings.ALARMAVAILABLETOPIC, 0,qos=2,retain=True)
+                                        self.publish(settings.ALARMLWTTOPIC, 'Offline',qos=2,retain=True)
+                                        self.publish(settings.ALARMCONNECTEDTOPIC, "0", qos=2, retain=False)
+                                    break
+
+                            elif line[1:5] == "PS00":       # Set Date/Time once a day on receipt of PS command. Usually midnight or any time the system is armed.
+                                self.setdatetime()          # Set Date/Time if Flag is set at 00:00 every day if option is enabled.
+
+
+                            elif line[1:3] == "IP" and settings.CacheState:
+                                ipMsg = ComfortIPInputActivationReport(line[1:])
+
+                                if ipMsg.state < 2 and settings.CacheState:
+                                    try:
+                                        _name = settings.input_properties[str(ipMsg.input)]['Name'] if settings.ZONEMAPFILE else "Zone" + "{:02d}".format(ipMsg.input)
+                                    except KeyError:
+                                        _name = "Zone" + str(ipMsg.input)
+
+                                    try:
+                                        _zoneword = settings.input_properties[str(ipMsg.input)]['ZoneWord'] if settings.ZONEMAPFILE else ""
+                                    except KeyError:
+                                        _zoneword = ""
+
+                                    settings.ZoneCache[ipMsg.input] = ipMsg.state  # Update local ZoneCache
+
+                                    # Publish simple numeric state for HA discovery
+                                    if 1 <= ipMsg.input <= int(settings.COMFORT_INPUTS):
+                                        self.publish(
+                                            settings.ALARMINPUTTOPIC % ipMsg.input,
+                                            str(int(ipMsg.state)),
+                                            qos=2,
+                                            retain=True
+                                        )
+                                        time.sleep(0.01)
+
+                                    # Optional log payload for diagnostics
+                                    log_msg = json.dumps({
+                                        "Time": datetime.now().replace(microsecond=0).isoformat(),
+                                        "Type": "input",
+                                        "Id": ipMsg.input,
+                                        "Name": _name,
+                                        "ZoneWord": _zoneword,
+                                        "State": int(ipMsg.state),
+                                        "Bypass": settings.BypassCache[ipMsg.input]
+                                    })
+                                    self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
+
+                            elif line[1:3] == "CT" and settings.CacheState:
+                                ipMsgCT = ComfortCTCounterActivationReport(line[1:])
+                                _time = datetime.now().replace(microsecond=0).isoformat()
+
+                                try:
+                                    _name = settings.counter_properties[str(ipMsgCT.counter)] if settings.COUNTERMAPFILE else f"Counter{ipMsgCT.counter}"
+                                except KeyError:
+                                    _name = f"Counter{ipMsgCT.counter}"
+
+                                logger.info(
+                                    "Counter report: time=%s counter=%s name=%r value=%s state=%s topic=%s",
+                                    _time,
+                                    ipMsgCT.counter,
+                                    _name,
+                                    ipMsgCT.value,
+                                    ipMsgCT.state,
+                                    settings.ALARMCOUNTERTOPIC % ipMsgCT.counter,
+                                )
+
+                                self.publish(
+                                    settings.ALARMCOUNTERTOPIC % ipMsgCT.counter,
+                                    str(ipMsgCT.value),
+                                    qos=2,
+                                    retain=True
+                                )
+                                time.sleep(0.01)
+
+
+                            elif line[1:3] == "s?":
+                                ipMsgSQ = ComfortCTCounterActivationReport(line[1:])
+                                sensor_id = ipMsgSQ.counter
+                                value = ipMsgSQ.state
+                                topic = settings.ALARMSENSORTOPIC % sensor_id
+
+                                try:
+                                    _name = settings.sensor_properties[str(sensor_id)] if settings.SENSORMAPFILE else f"Sensor{sensor_id:03d}"
+                                except KeyError:
+                                    logging.debug("Sensor %s not in CCLX file, ignoring CCLX enrichment", str(sensor_id))
+                                    _name = f"Sensor{sensor_id:03d}"
+
+                                logging.info(
+                                    "Sensor update (s?): id=%03d name=%s value=%s topic=%s",
+                                    sensor_id,
+                                    _name,
+                                    value,
+                                    topic
+                                )
+
+                                self.publish(
+                                    topic,
+                                    str(value),
+                                    qos=2,
+                                    retain=True
+                                )
+
+                            elif line[1:3] == "sr" and settings.CacheState:
+                                ipMsgSR = ComfortCTCounterActivationReport(line[1:])
+                                sensor_id = ipMsgSR.counter
+                                value = ipMsgSR.value
+                                topic = settings.ALARMSENSORTOPIC % sensor_id
+
+                                try:
+                                    _name = settings.sensor_properties[str(sensor_id)] if settings.SENSORMAPFILE else f"Sensor{sensor_id:03d}"
+                                except KeyError:
+                                    logging.debug("Sensor %s not in CCLX file, ignoring CCLX enrichment", str(sensor_id))
+                                    _name = f"Sensor{sensor_id:03d}"
+
+                                logging.info(
+                                    "Sensor update (sr): id=%03d name=%s value=%s topic=%s",
+                                    sensor_id,
+                                    _name,
+                                    value,
+                                    topic
+                                )
+
+                                self.publish(
+                                    topic,
+                                    str(value),
+                                    qos=2,
+                                    retain=True
+                                )
+
+
+                            elif line[1:3] == "TR":     # Timer Reports (Comfort stops reporting after a while)
+
+                                ipMsgTR = ComfortTRReport(line[1:])
+
+                                timer_id = ipMsgTR.timer
+                                value = ipMsgTR.value
+                                state = ipMsgTR.state
+                                topic = settings.COMFORTTIMERSTOPIC % timer_id
+
+                                try:
+                                    _name = settings.timer_properties[str(timer_id)] if settings.TIMERMAPFILE else f"Timer{timer_id:03d}"
+                                except KeyError:
+                                    logging.debug("Timer %s not in CCLX file, ignoring CCLX enrichment", str(timer_id))
+                                    _name = f"Timer{timer_id:03d}"
+
+                                logging.info(
+                                    "Timer publish: id=%03d name=%s value=%s state=%s topic=%s",
+                                    timer_id,
+                                    _name,
+                                    value,
+                                    state,
+                                    topic
+                                )
+
+                                self.publish(
+                                    topic,
+                                    str(value),
+                                    qos=2,
+                                    retain=True
+                                )
+
+                                log_msg = json.dumps({
+                                    "Time": datetime.now().replace(microsecond=0).isoformat(),
+                                    "Type": "timer",
+                                    "Id": timer_id,
+                                    "Name": _name,
+                                    "Value": value,
+                                    "State": state
+                                })
+
+                                self.publish(
+                                    settings.ALARMLOGTOPIC,
+                                    log_msg,
+                                    qos=2,
+                                    retain=False
+                                )
+
+                                time.sleep(0.01)
+
+
+
+                            elif line[1:3] == "LR":
+                                luMsg = ComfortLUUserLoggedIn(line[1:])
+                                if luMsg.user != 0:
+                                    logger.info("Comfort %s Login - %s", luMsg.method, f"User {luMsg.user}" if luMsg.user != 254 else "Engineer")
+                                    message_topic = f"Comfort {luMsg.method} Login - {f'User {luMsg.user}' if luMsg.user != 254 else 'Engineer'}"
+                                    #self.publish(settings.ALARMMESSAGETOPIC, message_topic, qos=2, retain=False)
+                                    self.publish_alarm_message(message_topic, retain=False)
+
+
+                            elif line[1:3] == "Z?":                             # Zones/Inputs
+                                zMsg = ComfortZ_ReportAllZones(line[1:])
+
+                                for ipMsgZ in zMsg.inputs:
+                                    try:
+                                        _name = settings.input_properties[str(ipMsgZ.input)]['Name'] if settings.ZONEMAPFILE else "Zone" + str(ipMsgZ.input)
+                                    except KeyError as e:
+                                        if int(e.args[0]) <= settings.COMFORT_INPUTS:
+                                            logging.debug("Zone %s not in CCLX file, ignoring CCLX 'Name' and 'ZoneWord' enrichment", str(e))
+                                        _name = "Zone" + str(ipMsgZ.input)
+
+                                    try:
+                                        _zoneword = settings.input_properties[str(ipMsgZ.input)]['ZoneWord'] if settings.ZONEMAPFILE else ""
+                                    except KeyError:
+                                        _zoneword = ""
+
+                                    settings.ZoneCache[ipMsgZ.input] = ipMsgZ.state  # Update local ZoneCache
+
+                                    # Publish simple numeric state for HA discovery
+                                    if 1 <= ipMsgZ.input <= int(settings.COMFORT_INPUTS):
+                                        self.publish(
+                                            settings.ALARMINPUTTOPIC % ipMsgZ.input,
+                                            str(int(ipMsgZ.state)),
+                                            qos=2,
+                                            retain=True
+                                        )
+                                        time.sleep(0.01)    # 10mS delay between publishes
+
+                                    # Optional log payload for diagnostics
+                                    log_msg = json.dumps({
+                                        "Time": datetime.now().replace(microsecond=0).isoformat(),
+                                        "Type": "input",
+                                        "Id": ipMsgZ.input,
+                                        "Name": _name,
+                                        "ZoneWord": _zoneword,
+                                        "State": int(ipMsgZ.state),
+                                        "Bypass": settings.BypassCache.get(ipMsgZ.input)
+                                    })
+                                    self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
+
+                                logger.debug("Max. Reported Zones/Inputs: %d", zMsg.max_zones)
+                                if zMsg.max_zones < int(settings.COMFORT_INPUTS):
+                                    logger.warning(
+                                        "Max. Reported Zone Inputs of %d is less than the configured value of %s",
+                                        zMsg.max_zones,
+                                        settings.COMFORT_INPUTS
+                                    )
+
+
+
+
+                            elif line[1:3] == "M?" or line[1:3] == "MD":
+                                mMsg = ComfortM_SecurityModeReport(line[1:])
+                                self.publish(settings.ALARMSTATETOPIC, mMsg.modename,qos=2,retain=True)      #Disarmed, Day etc
+                                self.publish(settings.ALARMMODETOPIC, mMsg.mode,qos=2,retain=True)
+                                ALARMSTATE = mMsg.mode         # Save Numerical state.
+                                self.entryexitdelay = 0                         #zero out the countdown timer
+                                if hasattr(self, "alarm_log"):
+                                    self.alarm_log.add(f"MODE -> {mMsg.modename} ({mMsg.mode})", level="STATE")
+
+
+                            elif line[1:3] == "S?":
+                                SMsg = ComfortS_SecurityModeReport(line[1:])
+                                self.publish(settings.ALARMSTATETOPIC, SMsg.modename,qos=2,retain=True)     # Idle, Alert etc.
+                                ALARMSTATE = SMsg.mode         # Save Numerical state.
+                                if hasattr(self, "alarm_log"):
+                                    self.alarm_log.add(f"STATUS -> {SMsg.modename}", level="STATE")
+
+
+                            elif line[1:3] == "V?":
+                                VMsg = ComfortV_SystemTypeReport(line[1:])
+                                                 
+                                settings.device_properties['ComfortFileSystem'] = str(VMsg.filesystem)
+                                settings.device_properties['ComfortFirmwareType'] = str(VMsg.firmware)
+                                settings.device_properties['Version'] = str(VMsg.version) + "." + str(VMsg.revision).zfill(3)
+
+                                self.UpdateDeviceInfo(True)     # Update Device properties.
+                                
+                                current_firmware = float(str(VMsg.version) + "." + str(VMsg.revision).zfill(3))
+                                #supported_firmware = float(SupportedFirmware)
+                                #logging.info("current: %s", current_firmware)
+                                #logging.info("supported: %s", float(SupportedFirmware))
+                                             
+                                #logging.info("%s detected (Firmware %d.%03d)", models[int(settings.device_properties['ComfortFileSystem'])] if int(settings.device_properties['ComfortFileSystem']) in models else "Unknown device", VMsg.version, VMsg.revision)
+
+                                if current_firmware >= settings.SupportedFirmware:
+                                    logging.info("%s detected (Supported Firmware %d.%03d)", settings.models[int(settings.device_properties['ComfortFileSystem'])] if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown device", VMsg.version, VMsg.revision)
+                                else:
+                                    logging.error("%s detected (Unsupported Firmware %d.%03d)", settings.models[int(settings.device_properties['ComfortFileSystem'])] if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown device", VMsg.version, VMsg.revision)
+
+                            elif line[1:5] == "u?01":       # Determine CPU type if available.
+                                uMsg = Comfort_U_SystemCPUTypeReport(line[1:])
+                                                
+                                settings.device_properties['CPUType'] = str(uMsg.cputype)
+                                if str(uMsg.cputype) != "N/A":
+                                    logging.debug("%s Mainboard CPU detected. Battery Monitoring Enabled.", str(settings.device_properties['CPUType']))
+                                else:   # Clear out battery voltages
+                                    settings.device_properties['BatteryVoltageMain'] = "-1"
+                                    settings.device_properties['BatteryVoltageSlave1'] = "-1"
+                                    settings.device_properties['BatteryVoltageSlave2'] = "-1"
+                                    settings.device_properties['BatteryVoltageSlave3'] = "-1"
+                                    settings.device_properties['BatteryVoltageSlave4'] = "-1"
+                                    settings.device_properties['BatteryVoltageSlave5'] = "-1"
+                                    settings.device_properties['BatteryVoltageSlave6'] = "-1"
+                                    settings.device_properties['BatteryVoltageSlave7'] = "-1"
+                                    settings.device_properties['ChargeVoltageMain'] = "-1"
+                                    settings.device_properties['ChargeVoltageSlave1'] = "-1"
+                                    settings.device_properties['ChargeVoltageSlave2'] = "-1"
+                                    settings.device_properties['ChargeVoltageSlave3'] = "-1"
+                                    settings.device_properties['ChargeVoltageSlave4'] = "-1"
+                                    settings.device_properties['ChargeVoltageSlave5'] = "-1"
+                                    settings.device_properties['ChargeVoltageSlave6'] = "-1"
+                                    settings.device_properties['ChargeVoltageSlave7'] = "-1"
+                                    settings.device_properties['ChargerStatus'] = "N/A"
+                                    settings.device_properties['BatteryStatus'] = "N/A"
+
+                                #logging.debug("settings.device_properties: %s", settings.device_properties)
+
+                                self.UpdateDeviceInfo(True)     # Update Device properties.
+
+                            elif line[1:3] == "EL":       # Determine HW model number CM9000/9001 if available and number of Slave confirmation.
+                                ELMsg = Comfort_EL_HardwareModelReport(line[1:])
+                                                 
+                                settings.device_properties['ComfortHardwareModel'] = str(ELMsg.hardwaremodel)
+
+                                logging.debug("Hardware Model %s", str(settings.device_properties['ComfortHardwareModel']))
+                                self.UpdateDeviceInfo(True)     # Update Device properties. Issue with no CCLX file and ComfortFileSyste, = Null.
+
+                            elif line[1:3] == "D?":       # Get Battery/Charge or DC Supply voltage. ARM/Toshiba + CM-9001 Only.
+
+                                # Determine Battery/Charge Voltage and Device ID. Save Values in Comfort_D_SystemVoltageReport
+                                DLMsg = Comfort_D_SystemVoltageReport(line[1:])     # Return value not used currently.
+                                self.UpdateBatteryStatus()
+                                #self.UpdateDeviceInfo(True)     # Update Device properties.
+                                
+                            elif line[1:5] == "SN01":       # Comfort Encoded Serial Number - Used for Refresh Key
+                                SNMsg = ComfortSN_SerialNumberReport(line[1:])
+                                if settings.COMFORT_SERIAL != SNMsg.serial_number:
+                                    pass
+                                settings.COMFORT_KEY = SNMsg.refreshkey
+                                logging.info("Refresh Key: %s", settings.COMFORT_KEY)
+                                logging.info("Serial Number: %s", settings.COMFORT_SERIAL)
+                                settings.device_properties['SerialNumber'] = settings.COMFORT_SERIAL
+                                
+                                self.UpdateDeviceInfo(True)     # Update Device properties.
+
+                            elif line[1:3] == "a?":     # Not Fully Implemented. For Future Development !!!
+                                aMsg = Comfort_A_SecurityInformationReport(line[1:])
+                                ALARMSTATE = aMsg.SS         # Save Numerical state.
+                                self.publish(settings.ALARMSTATUSTOPIC, aMsg.state, qos=2, retain=True)          
+                                if aMsg.type == 'LowBattery':
+                                    logging.warning("Low Battery - %s", aMsg.battery)
+                                elif aMsg.type == 'PowerFail':
+                                    logging.warning("AC Fail")      # Comfort doesn't yet report which unit fails.
+                                elif aMsg.type == 'Disarm':
+                                    logging.info("System Disarmed")
+
+
+                            elif line[1:3] == "ER" and settings.CacheState:
+                                erMsg = ComfortERArmReadyNotReady(line[1:])
+                                if erMsg.zone != 0:
+
+                                    zone = str(erMsg.zone)
+
+                                    if settings.ZONEMAPFILE & self.CheckIndexNumberFormat(zone):
+                                        zone_name = settings.input_properties.get(zone, {}).get("Name", "Unknown zone")
+
+                                        logging.warning("Zone %s (%s) Not Ready", zone, zone_name)
+                                        if zone_name == "Unknown zone":
+                                            logging.warning("Zone %s not in input_properties (keys sample=%s)",
+                                                            zone, list(settings.input_properties.keys())[:20])
+
+                                        message_topic = f"Zone {zone} ({zone_name}) Not Ready"
+                                    else:
+                                        logging.warning("Zone %s Not Ready", zone)
+                                        message_topic = f"Zone {zone} Not Ready"
+
+                                    self.publish_alarm_message(message_topic, retain=True)
+
+                                    # Optional (recommended): also add to your rolling log if you have it
+                                    #if hasattr(self, "alarm_log"):
+                                        #self.alarm_log.add(message_topic, level="WARN")
+
+                                else:
+                                    logging.info("Ready To Arm...")
+                                    # Sending KD1A when receiving ER message confuses Comfort. When arming local to any mode it immediately goes into Arm Mode
+                                    # Not all Zones are announced and it 'presses' the '#' key on your behalf.
+                                    # self.serial.write("\x03KD1A\r".encode()) #Force Arm, acknowledge Open Zones and Bypasses them.
+
+
+                            elif line[1:3] == "AM":    # AM/AR for Non-Detector alarms
+                                amMsg = ComfortAMSystemAlarmReport(line[1:])
+                                logging.warning(amMsg.message)
+                                #if amMsg.parameter <= int(COMFORT_INPUTS):
+                                #self.publish(settings.ALARMMESSAGETOPIC, amMsg.message, qos=2, retain=True)
+                                self.publish_alarm_message(amMsg.message, retain=True)
+                                if amMsg.triggered:
+                                    self.publish(settings.ALARMSTATETOPIC, "triggered", qos=2, retain=False)     # Original message
+                                    self.publish_alarm_message("triggered", retain=False)
+
+                            #elif line[1:3] == "AL":     # Under development (Alarm Type Report)
+                            #    alMsg = ComfortALSystemAlarmReport(line[1:])
+                            #    match ALARMSTATE:
+                            #        case 0:     # Idle
+                            #            self.publish(ALARMSTATUSTOPIC, "Idle", qos=2, retain=False)
+                            #        case 1:     # Trouble
+                            #            self.publish(ALARMSTATUSTOPIC, "Trouble", qos=2, retain=False)
+                            #        case 2:     # Alert
+                            #            self.publish(ALARMSTATUSTOPIC, "Alert", qos=2, retain=False)
+                            #        case 3:     # Alarm
+                            #            self.publish(ALARMSTATUSTOPIC, "Alarm", qos=2, retain=False)
+                            #        case _:     # Unknown (default)
+                            #            self.publish(ALARMSTATUSTOPIC, "Unknown", qos=2, retain=False)
+
+                                #if alMsg.parameter <= int(COMFORT_INPUTS):
+                                #    self.publish(ALARMMESSAGETOPIC, alMsg.message, qos=2, retain=True)
+                                #    logging.warning("Tamper %s", str(alMsg.parameter))
+                                #    if alMsg.triggered:
+                                #        self.publish(ALARMSTATETOPIC, "triggered", qos=2, retain=False)     # Original message
+                            
+                            elif line[1:3] == "AR":
+                                arMsg = ComfortARSystemAlarmReport(line[1:])
+                                #self.publish(settings.ALARMMESSAGETOPIC, arMsg.message,qos=2,retain=True)
+                                self.publish_alarm_message(arMsg.message, retain=True)
+                                #logging.info(arMsg.message)        # Removed logging for AR as it duplicates messages.
+
+                            elif line[1:3] == "EX":
+                                exMsg = ComfortEXEntryExitDelayStarted(line[1:])
+                                self.entryexitdelay = exMsg.delay
+                                self.entryexit_timer()
+                                if exMsg.type == 1:         # Entry Delay
+                                    self.publish(settings.ALARMSTATETOPIC, "pending",qos=2,retain=False)
+                                elif exMsg.type == 2:       # Exit Delay
+                                    self.publish(settings.ALARMSTATETOPIC, "arming",qos=2,retain=False)
+
+                            elif line[1:3] == "RP":
+                                result = self.validate_hex_in_list(line[3:5], "0,1,255")
+                                if result and line[3:5] == "01":
+                                    #self.publish(settings.ALARMMESSAGETOPIC, "Phone Ring",qos=2,retain=True)
+                                    self.publish_alarm_message("Phone Ring", retain=True)
+                                elif result and line[3:5] == "00":
+                                    #self.publish(settings.ALARMMESSAGETOPIC, "",qos=2,retain=True)   # Stopped Ringing
+                                    self.publish_alarm_message("", retain=True)
+                                elif result and line[3:5] == "FF":
+                                    #self.publish(settings.ALARMMESSAGETOPIC, "Phone Answer",qos=2,retain=True)
+                                    self.publish_alarm_message("Phone Answer", retain=True)
+
+                            elif line[1:3] == "DB":
+                                result = self.validate_hex_in_list(line[3:5], "49-51,255")
+                                if result and line[3:5] == "FF":
+                                    #self.publish(settings.ALARMMESSAGETOPIC, "",qos=2,retain=True)
+                                    self.publish_alarm_message("", retain=True)
+                                    #self.publish(settings.ALARMDOORBELLTOPIC, 0,qos=2,retain=True)
+                                    self.publish_alarm_message(0, retain=True)
+                                elif result:
+                                    #self.publish(settings.ALARMDOORBELLTOPIC, 1, qos=2,retain=True)
+                                    self.publish_alarm_message(1, retain=True)
+                                    message_topic = "Doorbell "+str(int(line[3:5], 16) - 48)
+                                    #self.publish(settings.ALARMMESSAGETOPIC, message_topic, qos=2, retain=True)
+                                    self.publish_alarm_message(message_topic, retain=True)
+
+
+                            elif line[1:3] == "OP" and settings.CacheState:
+                                opMsg = ComfortOPOutputActivationReport(line[1:])
+
+                                if opMsg.state < 2:
+                                    try:
+                                        _name = settings.output_properties[str(opMsg.output)] if settings.OUTPUTMAPFILE else "Output" + "{:03d}".format(opMsg.output)
+                                    except KeyError:
+                                        _name = "Output" + "{:03d}".format(opMsg.output)
+
+                                    # Publish simple numeric state for HA discovery
+                                    if 1 <= opMsg.output <= int(settings.COMFORT_OUTPUTS):
+                                        self.publish(
+                                            settings.ALARMOUTPUTTOPIC % opMsg.output,
+                                            str(int(opMsg.state)),
+                                            qos=2,
+                                            retain=True
+                                        )
+                                        topic = settings.ALARMOUTPUTTOPIC % opMsg.output
+                                        logger.warning("OP OUTPUT STATE publish topic=%r retain=True qos=2", topic)
+                                        time.sleep(0.01)
+
+                                    # Optional log payload for diagnostics
+                                    log_msg = json.dumps({
+                                        "Time": datetime.now().replace(microsecond=0).isoformat(),
+                                        "Type": "output",
+                                        "Id": opMsg.output,
+                                        "Name": _name,
+                                        "State": int(opMsg.state)
+                                    })
+                                    self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
+
+
+                            elif line[1:3] == "Y?":     # Comfort Outputs
+                                yMsg = ComfortY_ReportAllOutputs(line[1:])
+
+                                for opMsgY in yMsg.outputs:
+                                    try:
+                                        _name = settings.output_properties[str(opMsgY.output)] if settings.OUTPUTMAPFILE else "Output" + "{:03d}".format(opMsgY.output)
+                                    except KeyError as e:
+                                        if int(e.args[0]) <= int(settings.COMFORT_OUTPUTS):
+                                            logging.debug("Output %s not in CCLX file, ignoring CCLX enrichment", str(e))
+                                        _name = "Output" + "{:03d}".format(opMsgY.output)
+
+                                    # Publish simple numeric state for HA discovery
+                                    if 1 <= opMsgY.output <= int(settings.COMFORT_OUTPUTS):
+                                        self.publish(
+                                            settings.ALARMOUTPUTTOPIC % opMsgY.output,
+                                            str(int(opMsgY.state)),
+                                            qos=2,
+                                            retain=True
+                                        )
+                                        topic = settings.ALARMOUTPUTTOPIC % opMsgY.output
+                                        logger.info("OUTPUT STATE publish topic=%r retain=True qos=2", topic)
+
+                                    # Optional log payload for diagnostics
+                                    log_msg = json.dumps({
+                                        "Time": datetime.now().replace(microsecond=0).isoformat(),
+                                        "Type": "output",
+                                        "Id": opMsgY.output,
+                                        "Name": _name,
+                                        "State": int(opMsgY.state)
+                                    })
+                                    self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
+
+                                    time.sleep(0.01)    # 10mS delay between commands
+
+                                logger.debug("Max. Reported Outputs: %d", yMsg.max_zones)
+                                if yMsg.max_zones < int(settings.COMFORT_OUTPUTS):
+                                    logger.warning(
+                                        "Max. Reported Outputs of %d is less than the configured value of %s",
+                                        yMsg.max_zones,
+                                        settings.COMFORT_OUTPUTS
+                                    )
+
+
+                            elif line[1:5] == "r?00":
+                                cMsg = Comfort_R_ReportAllSensors(line[1:])
+                                for cMsgr in cMsg.counters:
+                                    _time = datetime.now().replace(microsecond=0).isoformat()
+                                    try:
+                                        _name = settings.counter_properties[str(cMsgr.counter)] if settings.COUNTERMAPFILE else f"Counter{cMsgr.counter}"
+                                    except KeyError:
+                                        _name = f"Counter{cMsgr.counter}"
+
+                                    # logger.info(
+                                    #     "Counter refresh: time=%s counter=%s name=%r value=%s state=%s topic=%s",
+                                    #     _time,
+                                    #     cMsgr.counter,
+                                    #     _name,
+                                    #     cMsgr.value,
+                                    #     cMsgr.state,
+                                    #     settings.ALARMCOUNTERTOPIC % cMsgr.counter,
+                                    # )
+
+                                    self.publish(
+                                        settings.ALARMCOUNTERTOPIC % cMsgr.counter,
+                                        str(cMsgr.value),
+                                        qos=2,
+                                        retain=True
+                                    )
+                                    time.sleep(0.01)    # 10mS delay between commands
+
+
+                            elif line[1:5] == "r?01":
+                                sMsg = Comfort_R_ReportAllSensors(line[1:])
+                                logging.info("Sensor report received: %d sensors", len(sMsg.sensors))
+                                for sMsgr in sMsg.sensors:
+                                    _time = datetime.now().replace(microsecond=0).isoformat()
+                                    try:
+                                        _name = settings.sensor_properties[str(sMsgr.sensor)] if settings.SENSORMAPFILE else f"sensor{sMsgr.sensor:03d}"
+                                    except KeyError as e:
+                                        logging.debug("Sensor %s not in CCLX file, ignoring CCLX enrichment", str(e))
+                                        _name = f"sensor{sMsgr.sensor:03d}"
+
+                                    topic = settings.ALARMSENSORTOPIC % sMsgr.sensor
+                                    value = sMsgr.value
+                                    # logging.info(
+                                    #     "Sensor publish: id=%03d name=%s value=%s topic=%s",
+                                    #     sMsgr.sensor,
+                                    #     _name,
+                                    #     value,
+                                    #     topic
+                                    # )
+
+                                    # publish plain integer value for HA number entity
+                                    self.publish(
+                                        topic,
+                                        str(value),
+                                        qos=2,
+                                        retain=True
+                                    )
+                                    time.sleep(0.01)    # 10mS delay between commands
+
+
+                            elif (line[1:3] == "f?") and (len(line) == 69):
+                                fMsg = Comfortf_ReportAllFlags(line[1:])
+                                logging.info("Flag report received: %d flags", len(fMsg.flags))
+
+                                for fMsgf in fMsg.flags:
+
+                                    flag_id = fMsgf.flag
+                                    state = int(fMsgf.state)
+                                    payload = "1" if state else "0"
+                                    topic = settings.ALARMFLAGTOPIC % flag_id
+
+                                    # Publish HA-friendly numeric state
+                                    self.publish(
+                                        topic,
+                                        payload,
+                                        qos=2,
+                                        retain=True
+                                    )
+
+                                    # Resolve flag name
+                                    try:
+                                        _name = settings.flag_properties[str(flag_id)] if settings.FLAGMAPFILE else f"Flag{flag_id:03d}"
+                                    except KeyError:
+                                        logging.debug("Flag %s not in CCLX file, ignoring CCLX enrichment", str(flag_id))
+                                        _name = f"Flag{flag_id:03d}"
+
+                                    # logging.info(
+                                    #     "Flag publish: id=%03d name=%s state=%s topic=%s",
+                                    #     flag_id,
+                                    #     _name,
+                                    #     state,
+                                    #     topic
+                                    # )
+
+                                    # # JSON log message (diagnostic only)
+                                    # log_msg = json.dumps({
+                                    #     "Time": datetime.now().replace(microsecond=0).isoformat(),
+                                    #     "Type": "flag",
+                                    #     "Id": flag_id,
+                                    #     "Name": _name,
+                                    #     "State": state
+                                    # })
+
+                                    # self.publish(
+                                    #     settings.ALARMLOGTOPIC,
+                                    #     log_msg,
+                                    #     qos=2,
+                                    #     retain=False
+                                    # )
+
+                                    time.sleep(0.01)  # 10mS delay between publishes
+
+
+
+
+
+                            elif (line[1:3] == "b?"):   # and (len(line) == 69):
+                                bMsg = ComfortB_ReportAllBypassZones(line[1:])
+                                if bMsg.value == 0:
+                                    logger.debug("Zones Bypassed: <None>")
+                                    self.publish(settings.ALARMBYPASSTOPIC, 0, qos=2, retain=True)
+                                else:
+                                    logger.debug("Zones Bypassed: %s", bMsg.value)
+                                    self.publish(settings.ALARMBYPASSTOPIC, bMsg.value, qos=2,retain=True)
+
+                            elif (line[1:9] == "DL7FF904"):
+                                if len(line[1:]) == 18:
+                                    settings.device_properties['uid'] = line[9:17]
+                                    DECODED_SERIAL = ComfortSN_SerialNumberReport(line[5:17])      # Decode raw data to get SN. SN command not working for some versions of firmware.
+                                    if DECODED_SERIAL.serial_number != settings.COMFORT_SERIAL:             # Check if SN and DL data match. 
+                                        settings.COMFORT_SERIAL = DECODED_SERIAL.serial_number
+                                        settings.device_properties['SerialNumber'] = settings.COMFORT_SERIAL
+                                else:
+                                    settings.device_properties['uid'] = "00000000"
+
+                            elif line[1:3] == "FL" and settings.CacheState:
+                                flMsg = ComfortFLFlagActivationReport(line[1:])
+
+                                payload = "1" if int(flMsg.state) else "0"
+                                self.publish(settings.ALARMFLAGTOPIC % flMsg.flag, payload, qos=2, retain=True)
+
+                                try:
+                                    _name = settings.flag_properties[str(flMsg.flag)] if settings.FLAGMAPFILE else "Flag" + "{:03d}".format(flMsg.flag)
+                                except KeyError:
+                                    _name = "Flag" + "{:03d}".format(flMsg.flag)
+                                log_msg = json.dumps({
+                                    "Time": datetime.now().replace(microsecond=0).isoformat(),
+                                    "Type": "flag",
+                                    "Id": flMsg.flag,
+                                    "Name": _name,
+                                    "State": int(flMsg.state)
+                                })
+                                self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
+                                time.sleep(0.01)
+
+
+                            elif line[1:3] == "BY" and settings.CacheState:
+                                byMsg = ComfortBYBypassActivationReport(line[1:])   
+                                _time = datetime.now().replace(microsecond=0).isoformat()
+
+                                if byMsg.zone <= int(settings.COMFORT_INPUTS):        # Was 128, changed to configured Zones.
+                                    try:
+                                        _name = settings.input_properties[str(byMsg.zone)]['Name'] if settings.ZONEMAPFILE else "Zone" + str(byMsg.zone)
+                                    except KeyError as e:
+                                        _name = "Zone" + str(byMsg.zone)
+                                    try:
+                                        _zoneword = settings.input_properties[str(byMsg.zone)]['ZoneWord'] if settings.ZONEMAPFILE else ""
+                                    except KeyError as e:
+                                        _zoneword = ""
+                                else:
+                                    pass
+
+                                _state = settings.ZoneCache[byMsg.zone]
+                                settings.BypassCache[byMsg.zone] = byMsg.state if byMsg.zone <= int(settings.COMFORT_INPUTS) else None
+
+                                if byMsg.state == 1 and byMsg.zone <= int(settings.COMFORT_INPUTS):
+                                    if settings.ZONEMAPFILE and self.CheckIndexNumberFormat(str(byMsg.zone)):
+                                        logging.warning("Zone %s (%s) Bypassed", str(byMsg.zone), _name)
+                                    else: logging.warning("Zone %s Bypassed", str(byMsg.zone))
+                                elif byMsg.state == 0 and byMsg.zone <= int(settings.COMFORT_INPUTS):
+                                    if settings.ZONEMAPFILE and self.CheckIndexNumberFormat(str(byMsg.zone)):
+                                        logging.info("Zone %s (%s) Unbypassed", str(byMsg.zone), _name)
+                                    else: logging.info("Zone %s Unbypassed", str(byMsg.zone))
+
+                                MQTT_MSG=json.dumps({"Time": _time, 
+                                                     "Name": _name,
+                                                     "ZoneWord": _zoneword if byMsg.zone <= int(settings.COMFORT_INPUTS) else None,
+                                                     "State": _state, 
+                                                     "Bypass": settings.BypassCache[byMsg.zone] if byMsg.zone <= int(settings.COMFORT_INPUTS) else None
+                                                    })
+                                if byMsg.zone <= int(settings.COMFORT_INPUTS):
+                                    self.publish(settings.ALARMINPUTTOPIC % byMsg.zone, MQTT_MSG,qos=2,retain=False)    # 19/8/2024 Changed to False
+                                    time.sleep(0.01)    # 10mS delay between commands
+
+                                    self.publish(settings.ALARMBYPASSTOPIC, byMsg.value, qos=2,retain=True)  # Add Zone to list of zones.
+                                    time.sleep(0.01)    # 10mS delay between commands
+
+                            elif line[1:3] == "RS":
+                                #on rare occassions comfort ucm might get reset (RS11), our session is no longer valid, need to relogin
+                                logger.warning('Reset detected')
+                                settings.FIRST_LOGIN = True  # Added 29/4/2025. Enable full refresh after reset.
+                                self.login()
+                            else:
+                                if datetime.now() > (settings.SAVEDTIME + settings.TIMEOUT):  # If no command sent in 30 seconds then send keepalive.
+                                    self.serial.write("\x03cc00\r".encode()) #echo command for keepalive. cc00
+                                    settings.SAVEDTIME = datetime.now()
+                                    time.sleep(0.1)
+                        else:
+                            logger.warning("Invalid response received (%s)", line.encode())
+
+
+                except (serial.SerialException, OSError) as v:
+                    logger.debug("Comfort serial error '%s'", str(v))
+                finally:
+                    if self.serial:
+                        try:
+                            self.serial.close()
+                        except Exception:
+                            pass
+                        self.serial = None
+
+
+                settings.COMFORTCONNECTED = False
+                settings.FIRST_LOGIN = True  # Added 29/4/2025
+                logger.error('Lost connection to Comfort, reconnecting...')
+                if settings.BROKERCONNECTED == True:      # MQTT Connected ??
+                    self.publish(settings.ALARMAVAILABLETOPIC, 0,qos=2,retain=True)
+                    self.publish(settings.ALARMLWTTOPIC, 'Offline',qos=2,retain=True)
+                    self.publish(settings.ALARMCONNECTEDTOPIC, "1" if settings.COMFORTCONNECTED else "0", qos=2, retain=False)
+                    
+                time.sleep(settings.RETRY.seconds)
+        except KeyboardInterrupt as e:
+            logger.debug("SIGINT (Ctrl-C) Intercepted")
+            logger.info('Shutting down.')
+            self.exit_gracefully(1,1)
+            if self.connected == True:
+                settings.device_properties['BridgeConnected'] = 0
+                try:
+                    self.serial.write("\x03LI\r".encode()) #Logout command.
+                except:
+                    pass
+            settings.RUN = False
+            self.loop_stop
+        finally:
+            if settings.BROKERCONNECTED == True:      # MQTT Connected ??
+                infot = self.publish(settings.ALARMAVAILABLETOPIC, 0,qos=2,retain=True)
+                infot = self.publish(settings.ALARMLWTTOPIC, 'Offline',qos=2,retain=True)
+                infot.wait_for_publish(1)
+                self.loop_stop
+   
+    # Add the code to publish the maps from the cclx to MQTT - Cytech26
+ 
+    def _publish_meta(self, name: str, payload_obj, qos: int = 1):
+        """Publish retained JSON under DOMAIN/meta/<name>."""
+        try:
+            payload = json.dumps(payload_obj, ensure_ascii=False)
+            self.publish(f"{settings.DOMAIN}/meta/{name}", payload, qos=qos, retain=True)
+            logger.info("Published meta '%s' (%d bytes)", name, len(payload.encode("utf-8")))
+        except Exception as e:
+            logger.exception("Failed to publish meta '%s': %s", name, e)
+
+
+    def publish_all_maps(self):
+        """Publish all CCLX-derived maps as retained MQTT metadata."""
+
+
+        ts = datetime.now().replace(microsecond=0).isoformat()
+
+        self._publish_meta("zones", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.ZONEMAPFILE)},
+            "count": len(settings.input_properties or {}),
+            "items": (settings.input_properties or {})
+        })
+
+        self._publish_meta("counters", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.COUNTERMAPFILE)},
+            "count": len(settings.counter_properties or {}),
+            "items": (settings.counter_properties or {})
+        })
+
+        self._publish_meta("flags", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.FLAGMAPFILE)},
+            "count": len(settings.flag_properties or {}),
+            "items": (settings.flag_properties or {})
+        })
+
+        self._publish_meta("outputs", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.OUTPUTMAPFILE)},
+            "count": len(settings.output_properties or {}),
+            "items": (settings.output_properties or {})
+        })
+
+        self._publish_meta("sensors", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.SENSORMAPFILE)},
+            "count": len(settings.sensor_properties or {}),
+            "items": (settings.sensor_properties or {})
+        })
+
+
+        self._publish_meta("users", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.USERMAPFILE)},
+            "count": len(settings.user_properties or {}),
+            "items": (settings.user_properties or {})
+        })
+
+        self._publish_meta("timers", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.TIMERMAPFILE)},
+            "count": len(settings.timer_properties or {}),
+            "items": (settings.timer_properties or {})
+        })
+
+        # Optional: quick index/health topic
+        self._publish_meta("summary", {
+            "time": ts,
+            "cclx_file": settings.COMFORT_CCLX_FILE,
+            "enabled": {
+                "zones": bool(settings.ZONEMAPFILE),
+                "counters": bool(settings.COUNTERMAPFILE),
+                "flags": bool(settings.FLAGMAPFILE),
+                "outputs": bool(settings.OUTPUTMAPFILE),
+                "sensors": bool(settings.SENSORMAPFILE),
+                "users": bool(settings.USERMAPFILE),
+                "timers": bool(settings.TIMERMAPFILE),
+                "devices": bool(settings.DEVICEMAPFILE),
+            },
+            "counts": {
+                "zones": len(settings.input_properties or {}),
+                "counters": len(settings.counter_properties or {}),
+                "flags": len(settings.flag_properties or {}),
+                "outputs": len(settings.output_properties or {}),
+                "sensors": len(settings.sensor_properties or {}),
+                "users": len(settings.user_properties or {}),
+                "timers": len(settings.timer_properties or {}),
+            }
+        })
+
+
+
+
+
+def validate_certificate(certificate):
+    # Check Valid Certificate file and Valid Dates. NotBefore and NotAfter must be within datetime.now()
+
+    if not os.path.isfile(certificate):
+        return 2    # Missing certificate
+    # Open the certificate file in binary mode
+    with open(certificate, 'rb') as cert_file:
+        cert_data = cert_file.read()
+
+    try:
+        # Load the certificate using the binary data
+        x509 = crypto.load_certificate(crypto.FILETYPE_PEM, cert_data)
+
+        # Check the 'notAfter' attribute
+        not_after = x509.get_notAfter()
+        not_before = x509.get_notBefore() 
+        if not_after:
+            ValidTo = not_after.decode()
+        if not_before:
+            ValidFrom = not_before.decode()
+
+        # Define the format of the datetime strings
+        datetime_format = "%Y%m%d%H%M%SZ"
+
+        # Convert the strings to datetime objects
+        ValidTo = datetime.strptime(ValidTo, datetime_format)
+        ValidFrom = datetime.strptime(ValidFrom, datetime_format)
+    
+        if (datetime.now() >= ValidFrom) and (datetime.now() < ValidTo):
+            return 0    # Valid certificate
+        else:
+            return 1    # Expired certificate
+    except crypto.Error as e:
+        raise ValueError(f"Error loading certificate: {e}")
+
+mqttc = Comfort2(callback_api_version = mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id, protocol=mqtt.MQTTv5, transport=MQTT_PROTOCOL)
+
+certs: str = "/config/certificates"                 # Certificates directory directly off the root.
+if MQTT_ENCRYPTION and not os.path.isdir(certs):    # Display warning if Encryption is enabled but certificates directory is not found.
+    logging.debug('"/config/certificates" directory not found.')
+
+if((MQTT_CA_CERT and MQTT_CA_CERT.strip())): ca_cert = os.sep.join([certs, MQTT_CA_CERT])
+if((MQTT_CLIENT_CERT and MQTT_CLIENT_CERT.strip())): client_cert = os.sep.join([certs, MQTT_CLIENT_CERT])
+if((MQTT_CLIENT_KEY and MQTT_CLIENT_KEY.strip())): client_key = os.sep.join([certs, MQTT_CLIENT_KEY])
+
+if not MQTT_ENCRYPTION:
+    logging.warning('MQTT Transport Layer Security disabled.')
+else:
+    ### Check some certificate validity here ###
+    match  validate_certificate(ca_cert):
+        case 1:     # Invalid CA Certificate
+            logging.warning('MQTT TLS CA Certificate Expired or not Valid (%s)', ca_cert )
+            logging.warning("Reverting MQTT Port to default '1883' (Unencrypted)")
+            MQTTBROKERPORT = 1883
+            MQTT_ENCRYPTION = False
+
+        case 2:     # Certificate not found
+            logging.warning('No MQTT TLS CA Certificate found, disabling TLS')
+            logging.warning("Reverting MQTT Port to default '1883'")
+            MQTTBROKERPORT = 1883
+            MQTT_ENCRYPTION = False
+
+        case 3:     # Invalid Client Certificate or Key
+            logging.warning('Client Key or Certificate Expired or Invalid')
+
+        case 0:     # Valid Certificate
+            logging.debug('Valid MQTT TLS CA Certificate found (%s)', ca_cert )
+            tls_args = {}
+            tls_args['ca_certs'] = ca_cert
+            mqttc.tls_set(**tls_args, tls_version=ssl.PROTOCOL_TLSv1_2)
+            #mqttc.tls_insecure_set(True)
+            mqttc.tls_insecure_set(False)
+
+        case _:
+            # Default
+            pass
+
+
+def main():
+    global ACTIVE_CLIENT
+
+ # Already set:
+ # MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASSWORD, MQTT_PROTOCOL
+
+    COMFORT_PINCODE = option.comfort_login_id
+    MQTT_VERSION = mqtt.MQTTv5
+
+    mqttc = Comfort2(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        client_id=settings.mqtt_client_id,
+        protocol=MQTT_VERSION,
+        transport=MQTT_PROTOCOL
+    )
+
+    mqttc.init(
+        MQTT_HOST,
+        MQTT_PORT,
+        MQTT_USER,
+        MQTT_PASSWORD,
+        COMFORT_PINCODE,
+        MQTT_VERSION
+    )
+
+
+    mqttc.run()
+
+
+if __name__ == "__main__":
+    main()
+
+
+
