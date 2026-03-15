@@ -192,7 +192,9 @@ logger.debug("MQTT_CLIENT_CERT = %s", settings.MQTT_CLIENT_CERT)
 logger.debug("MQTT_CLIENT_KEY = %s", settings.MQTT_CLIENT_KEY)
 logger.debug("MQTT_LOG_LEVEL = %s", settings.LOG_VERBOSITY)
 logger.debug("COMFORT_TIME = %s", settings.COMFORT_TIME)
-
+logger.info("BATTERYREFRESHTOPIC = %s", settings.BATTERYREFRESHTOPIC)
+logger.info("COMFORT_BATTERY_STATUS_ID = %s", settings.COMFORT_BATTERY_STATUS_ID)
+logger.info("CPUType = %s", settings.device_properties.get("CPUType"))
 
 
 ACTIVE_CLIENT = None
@@ -546,6 +548,7 @@ class Comfort2(mqtt.Client):
                 self.readcurrentstate()
         
         elif msg.topic.startswith(settings.DOMAIN) and msg.topic.endswith("/battery_update"):
+            logger.debug("Battery update MQTT received: topic=%s payload=%r", msg.topic, msg.payload)
 
             Devices = ['0','1']        # Mainboard + Installed Slaves EG. ['0', '1','33','34','35' ti '39'].
             for device in range(0, int(settings.device_properties['sem_id'])):
