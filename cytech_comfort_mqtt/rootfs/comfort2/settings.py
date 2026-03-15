@@ -28,11 +28,31 @@ BUFFER_SIZE = 4096
 COMFORT_BATTERY_STATUS_ID = 1
 COMFORT_CCLX_FILE = None    # Path to active CCLX file (set at runtime)
 
+# ============================================================
+# MQTT SETTINGS
+# ============================================================
+
 lower = 268435456
 upper = 4294967295
 rand_int = lower + secrets.randbelow(upper - lower + 1)
 rand_hex_str = hex(rand_int)
 mqtt_client_id = DOMAIN+"-"+str(rand_hex_str[2:])       # Generate pseudo random client-id each time it starts.
+
+MQTTBROKER = "core-mosquitto"
+MQTTBROKERIP = None
+MQTTPORT = 1883
+
+MQTTUSERNAME = None
+MQTTPASSWORD = None
+
+MQTTPROTOCOL = "TCP"
+MQTTENCRYPTION = False
+
+MQTT_CA_CERT = None
+MQTT_CLIENT_CERT = None
+MQTT_CLIENT_KEY = None
+
+LOG_VERBOSITY = "INFO"
 
 # Alarm state (used by M?/MD/S? handlers)
 ALARMSTATE = 0

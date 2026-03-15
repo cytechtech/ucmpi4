@@ -79,14 +79,99 @@ import inspect
 
 from options import load_options, get_str, get_int, get_bool
 
+
+def get_ip_address(input_value):
+    if is_ipv4_address(input_value):
+        return input_value
+    else:
+        return resolve_to_ip(input_value)
+
+
+
 logger = logging.getLogger(__name__)
 _opts = load_options()
 
+# ----------------------------
+# Runtime configuration
+# ----------------------------
+
+# MQTT
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
 settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
 settings.MQTTPASSWORD = get_str(_opts, "mqtt_password", None)
+settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
 settings.MQTTENCRYPTION = get_bool(_opts, "mqtt_encryption", False)
+settings.MQTT_CA_CERT = get_str(_opts, "broker_ca", None)
+settings.MQTT_CLIENT_CERT = get_str(_opts, "broker_client_cert", None)
+settings.MQTT_CLIENT_KEY = get_str(_opts, "broker_client_key", None)
+
+# Optional resolved broker IP for diagnostics
+settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
+
+# Comfort
+settings.COMFORT_LOGIN_ID = get_str(_opts, "comfort_login_id", "")
+settings.COMFORT_CCLX_FILE = get_str(_opts, "comfort_cclx_file", None)
+settings.COMFORT_TIME = get_bool(_opts, "comfort_time", False)
+
+battery_id = get_int(_opts, "comfort_battery_update", 1)
+settings.COMFORT_BATTERY_STATUS_ID = (
+    battery_id if battery_id in [0, 1] + list(range(33, 40)) else 1
+)
+
+# Alarm sizing
+settings.COMFORT_INPUTS = get_int(_opts, "alarm_inputs", 8)
+settings.COMFORT_OUTPUTS = get_int(_opts, "alarm_outputs", 0)
+settings.COMFORT_RESPONSES = get_int(_opts, "alarm_responses", 0)
+
+if settings.COMFORT_INPUTS < 8:
+    settings.COMFORT_INPUTS = 8
+if settings.COMFORT_INPUTS > settings.MAX_ZONES:
+    settings.COMFORT_INPUTS = settings.MAX_ZONES
+ALARMVIRTUALINPUTRANGE = range(1, settings.COMFORT_INPUTS + 1)
+
+if settings.COMFORT_OUTPUTS < 0:
+    settings.COMFORT_OUTPUTS = 0
+if settings.COMFORT_OUTPUTS > settings.MAX_OUTPUTS:
+    settings.COMFORT_OUTPUTS = settings.MAX_OUTPUTS
+ALARMNUMBEROFOUTPUTS = settings.COMFORT_OUTPUTS
+
+if settings.COMFORT_RESPONSES < 0:
+    settings.COMFORT_RESPONSES = 0
+if settings.COMFORT_RESPONSES > settings.MAX_RESPONSES:
+    settings.COMFORT_RESPONSES = settings.MAX_RESPONSES
+ALARMNUMBEROFRESPONSES = settings.COMFORT_RESPONSES
+
+# Logging
+settings.LOG_VERBOSITY = get_str(_opts, "log_verbosity", "INFO").upper()
+if settings.LOG_VERBOSITY not in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]:
+    settings.LOG_VERBOSITY = "INFO"
+
+logging.basicConfig(
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    level=getattr(logging, settings.LOG_VERBOSITY, logging.INFO),
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger.info("Completed importing addon configuration options")
+logger.debug("MQTT_USER = %s", settings.MQTTUSERNAME)
+logger.debug("MQTT_PASSWORD = ******")
+logger.debug("MQTT_SERVER = %s", settings.MQTTBROKERIP)
+
+if not settings.MQTTENCRYPTION:
+    logger.debug("MQTT_PROTOCOL = %s/%s (Unsecure)", settings.MQTTPROTOCOL, settings.MQTTPORT)
+else:
+    logger.debug("MQTT_PROTOCOL = %s/%s (Encrypted)", settings.MQTTPROTOCOL, settings.MQTTPORT)
+
+logger.debug("COMFORT_LOGIN_ID = ******")
+logger.debug("COMFORT_CCLX_FILE = %s", settings.COMFORT_CCLX_FILE)
+logger.debug("COMFORT_BATTERY_STATUS_ID = %s", settings.COMFORT_BATTERY_STATUS_ID)
+logger.debug("MQTT_CA_CERT = %s", settings.MQTT_CA_CERT)
+logger.debug("MQTT_CLIENT_CERT = %s", settings.MQTT_CLIENT_CERT)
+logger.debug("MQTT_CLIENT_KEY = %s", settings.MQTT_CLIENT_KEY)
+logger.debug("MQTT_LOG_LEVEL = %s", settings.LOG_VERBOSITY)
+logger.debug("COMFORT_TIME = %s", settings.COMFORT_TIME)
+
 
 
 ACTIVE_CLIENT = None
@@ -134,133 +219,7 @@ class LoggedSerial(serial.Serial):
         return data
 
 
-
-
-
-def boolean_string(s):
-
-    if s.lower() == 'true':
-        return True
-    #elif s.lower() == 'false':
-    #    return False
-    else:
-        #raise ValueError("Not a valid boolean string. Set to either 'True' or 'False'.")
-        return False
-    
-parser = ArgumentParser()
-
-group = parser.add_argument_group('MQTT options')
-group.add_argument(
-    '--broker-address',
-    required=True,
-    help='IP Address of the MQTT broker')
-
-group.add_argument(
-    '--broker-port',
-    type=int, default=1883,
-    help="TCP Port Number to connect to the MQTT broker. [default: '1883']")
-
-group.add_argument(
-    '--broker-username',
-    required=True,
-    help='MQTT Username to use for MQTT broker authentication.')
-
-group.add_argument(
-    '--broker-password',
-    required=True,
-    help='MQTT Password to use for MQTT broker authentication.')
-
-group.add_argument(
-    '--broker-protocol',
-    required=False,
-    dest='broker_protocol', default='TCP', choices=(
-         'TCP', 'WebSockets'),
-    help="TCP or WebSockets Transport Protocol for MQTT broker. [default: 'TCP']")
-
-group.add_argument(
-    '--broker-encryption',
-    type=boolean_string, default='false',
-    help="Use MQTT TLS encryption, 'True'|'False'. [default: 'False']")
-
-group.add_argument(
-    '--broker-ca',
-    help='Filename of CA certificate to trust.')
-group.add_argument(
-    '--broker-client-cert',
-    help='Filename of PEM-encoded client certificate (public part). If not '
-         'specified, client authentication will not be used. Must also '
-         'supply the private key (--broker-client-key).')
-
-group.add_argument(
-    '--broker-client-key',
-    help='Filename of PEM-encoded client key (private part). If not '
-         'specified, client authentication will not be used. Must also '
-         'supply the public key (--broker-client-cert). If this file is encrypted, Python '
-         'will prompt for the password at the command-line.')
-
-group = parser.add_argument_group('Comfort System options')
-# group.add_argument(
-#     '--comfort-address',
-#     required=True,
-#     help='IP Address of the Comfort system in IPV4 format.')
-
-# group.add_argument(
-#     '--comfort-port',
-#     type=int, default=1002,
-#     help="TCP Port to connect to Comfort system. [default: '1002']")
-
-group.add_argument(
-    '--comfort-login-id',
-    required=True,
-    help='Comfort system Login ID.')
-
-group.add_argument(
-    '--comfort-cclx-file',
-    help='Comfort (CCLX) Configuration filename.')
-
-group.add_argument(
-    '--comfort-battery-update',
-    type=int, default=1,
-    help="Comfort MQTT Bridge 'Battery Update' query ID. [default: '1']")
-
-group.add_argument(
-    '--comfort-time',
-    type=boolean_string, default='false',
-    help="Set Comfort Date and Time flag, 'True'|'False'. [default: 'False']")
-
-group = parser.add_argument_group('Comfort Alarm options')
-group.add_argument(
-    '--alarm-inputs',
-    type=int, default=8,
-    help="Number of physical Zone Inputs, values from 8 - " + str(settings.MAX_ZONES) + " in increments of 8. [default: '8']")
-
-group.add_argument(
-    '--alarm-outputs',
-    type=int, default=0,
-    help="Number of physical Zone Outputs, values from 0 - " + str(settings.MAX_OUTPUTS) + " in increments of 8. [default: '0']")
-
-group.add_argument(
-    '--alarm-responses',
-    type=int, default=0,
-    help="Number of Responses, values 0 - 1024. [default: '0']")
-
-group = parser.add_argument_group('Logging options')
-group.add_argument(
-    '--verbosity',
-    dest='log_verbosity', default='INFO', choices=(
-        'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'),
-    help='Verbosity of logging to emit [default: %(default)s]')
-
-option = parser.parse_args()
-
-logging.basicConfig(
-    format='%(asctime)s %(levelname)-8s %(message)s',
-    level=option.log_verbosity,
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-
 TOKEN = os.getenv('SUPERVISOR_TOKEN')
-ALPINE_VERSION = "N/A" if os.getenv('ALPINE_VERSION') == None else os.getenv('ALPINE_VERSION')
 
 supervisor_url = 'http://supervisor'
 addon_info_url = f'{supervisor_url}/addons/self/info'
@@ -282,20 +241,6 @@ else:
     else:
         logger.error("Failed to get Addon Info: Error Code %s, %s", response.status_code, response.reason)
 
-logger.info('Importing the add-on configuration options')
-
-
-logger.info('Importing the add-on configuration options')
-
-MQTT_HOST = option.broker_address
-MQTT_PORT = option.broker_port
-MQTT_USER = option.broker_username
-MQTT_PASSWORD = option.broker_password
-MQTT_PROTOCOL = option.broker_protocol
-MQTT_ENCRYPTION = option.broker_encryption
-MQTT_CA_CERT = option.broker_ca
-MQTT_CLIENT_CERT = option.broker_client_cert
-MQTT_CLIENT_KEY = option.broker_client_key
 
 def is_ipv4_address(address):
     try:
@@ -310,12 +255,6 @@ def resolve_to_ip(fqdn):
     except socket.gaierror:
         return None
 
-def get_ip_address(input_value):
-    if is_ipv4_address(input_value):
-        return input_value
-    else:
-        return resolve_to_ip(input_value)
-
 def validate_port(_port, min=1, max=65535):
     try:
         port = int(_port)
@@ -327,87 +266,9 @@ def validate_port(_port, min=1, max=65535):
     except Exception as e:
         logging.error(f"Invalid parameter: {_port}")        #Original passed value
         return False    
-     
-# Check to see if it's a Hostname.domain or IPv4 address. Resolve Hostname to IP.
-# COMFORT_ADDRESS=get_ip_address(option.comfort_address)
-MQTT_SERVER=get_ip_address(option.broker_address)
-
-settings.COMFORT_LOGIN_ID=option.comfort_login_id
-settings.COMFORT_CCLX_FILE=option.comfort_cclx_file
-MQTT_LOG_LEVEL=option.log_verbosity if option.log_verbosity in ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'] else 'INFO'
-settings.COMFORT_INPUTS=int(option.alarm_inputs) if validate_port(option.alarm_inputs,8,settings.MAX_ZONES) else 8
-settings.COMFORT_OUTPUTS=int(option.alarm_outputs) if validate_port(option.alarm_outputs,0,settings.MAX_OUTPUTS) else 0
-settings.COMFORT_RESPONSES=int(option.alarm_responses) if validate_port(option.alarm_responses,0,settings.MAX_RESPONSES) else 0
-
-settings.COMFORT_BATTERY_STATUS_ID = (
-    int(option.comfort_battery_update)
-    if str(option.comfort_battery_update).isdigit()
-    and int(option.comfort_battery_update) in [0, 1] + list(range(33, 40))
-    else 1
-)
-
-# Sync runtime configuration into settings for protocol layer
-
-settings.COMFORT_TIME=str(option.comfort_time)
-
-
-if settings.COMFORT_INPUTS < 8:
-    settings.COMFORT_INPUTS = 8
-if settings.COMFORT_INPUTS > settings.MAX_ZONES:                          # 128 is max. setting for possible future expansion. 96 currently supported by Cytech.
-    settings.COMFORT_INPUTS = settings.MAX_ZONES
-ALARMVIRTUALINPUTRANGE = range(1,int(settings.COMFORT_INPUTS)+1) 
-
-
-if settings.COMFORT_OUTPUTS < 0:
-    settings.COMFORT_OUTPUTS = 0
-if settings.COMFORT_OUTPUTS > settings.MAX_OUTPUTS:
-    settings.COMFORT_OUTPUTS = settings.MAX_OUTPUTS
-ALARMNUMBEROFOUTPUTS = settings.COMFORT_OUTPUTS                  
-
-
-if settings.COMFORT_RESPONSES < 0:
-    settings.COMFORT_RESPONSES = 0
-if settings.COMFORT_RESPONSES > settings.MAX_RESPONSES:
-    settings.COMFORT_RESPONSES = settings.MAX_RESPONSES
-ALARMNUMBEROFRESPONSES = settings.COMFORT_RESPONSES              #set in configuration according to your system. Default 0, Max 1024
-
-
-logger.info('Completed importing addon configuration options')
-
-# The following variables values were passed through via the Home Assistant add on configuration options
-logger.debug('The following variable values were passed through via Home Assistant')
-logger.debug('MQTT_USER = %s', MQTT_USER)
-logger.debug('MQTT_PASSWORD = ******')
-logger.debug('MQTT_SERVER = %s', MQTT_SERVER)
-
-if not MQTT_ENCRYPTION: logger.debug('MQTT_PROTOCOL = %s/%s (Unsecure)', MQTT_PROTOCOL, MQTT_PORT)
-else: logger.debug('MQTT_PROTOCOL = %s/%s (Encrypted)', MQTT_PROTOCOL, MQTT_PORT)
-
-#logger.debug('COMFORT_ADDRESS = %s', COMFORT_ADDRESS)
-#logger.debug('COMFORT_PORT = %s', COMFORT_PORT)
-logger.debug('COMFORT_LOGIN_ID = ******')
-logger.debug('COMFORT_CCLX_FILE = %s', settings.COMFORT_CCLX_FILE)
-logger.debug('COMFORT_BATTERY_STATUS_ID = %s', str(settings.COMFORT_BATTERY_STATUS_ID))
-logger.debug('MQTT_CA_CERT = %s', MQTT_CA_CERT)          
-logger.debug('MQTT_CLIENT_CERT = %s', MQTT_CLIENT_CERT)  
-logger.debug('MQTT_CLIENT_KEY = %s', MQTT_CLIENT_KEY)    
-
-logger.debug('MQTT_LOG_LEVEL = %s', MQTT_LOG_LEVEL)
-logger.debug('COMFORT_TIME= %s', settings.COMFORT_TIME)
-
-# Map HA variables to internal variables.
-
-MQTTBROKERIP = MQTT_SERVER
-MQTTBROKERPORT = int(MQTT_PORT)
-MQTTUSERNAME = MQTT_USER
-MQTTPASSWORD = MQTT_PASSWORD
-PINCODE = settings.COMFORT_LOGIN_ID
-
 
 # Send all alarm related data to HA so it can be shown in the UX as a live log of events.
 # This is for debugging and also to see the history of events leading up to an alarm.
-
-
 
 class RollingMqttLog:
     def __init__(self, mqtt_client, topic, max_lines=80, ts_format="%H:%M:%S"):
@@ -449,8 +310,6 @@ class RollingMqttLog:
 
 
 class Comfort2(mqtt.Client):
-
-
 
     def init(self, mqtt_ip, mqtt_port, mqtt_username, mqtt_password, comfort_pincode, mqtt_version):
         self.mqtt_ip = mqtt_ip
@@ -1507,7 +1366,7 @@ class Comfort2(mqtt.Client):
                             "identifiers": ["cytech_comfort_mqtt"],
                             "manufacturer": "Cytech Technology Pte Ltd",
                             "sw_version": ADDON_VERSION,
-                            "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                            "hw_version": "Comfort Panel",
                             "model": "Comfort"
                           }
             else:
@@ -1515,7 +1374,7 @@ class Comfort2(mqtt.Client):
                                           "identifiers": ["cytech_comfort_mqtt"],
                                           "manufacturer": "Cytech Technology Pte Ltd",
                                           "sw_version": ADDON_VERSION,
-                                          "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                                          "hw_version": "Comfort Panel",
                                           "configuration_url": "homeassistant://hassio/addon/" + ADDON_SLUG + "/info",
                                           "model": "Comfort"
                                         }
@@ -3275,14 +3134,14 @@ def validate_certificate(certificate):
 mqttc = Comfort2(callback_api_version = mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id, protocol=mqtt.MQTTv5, transport=MQTT_PROTOCOL)
 
 certs: str = "/config/certificates"                 # Certificates directory directly off the root.
-if MQTT_ENCRYPTION and not os.path.isdir(certs):    # Display warning if Encryption is enabled but certificates directory is not found.
+if settings.MQTTENCRYPTION and not os.path.isdir(certs):    # Display warning if Encryption is enabled but certificates directory is not found.
     logging.debug('"/config/certificates" directory not found.')
 
-if((MQTT_CA_CERT and MQTT_CA_CERT.strip())): ca_cert = os.sep.join([certs, MQTT_CA_CERT])
-if((MQTT_CLIENT_CERT and MQTT_CLIENT_CERT.strip())): client_cert = os.sep.join([certs, MQTT_CLIENT_CERT])
-if((MQTT_CLIENT_KEY and MQTT_CLIENT_KEY.strip())): client_key = os.sep.join([certs, MQTT_CLIENT_KEY])
+if((settings.MQTT_CA_CERT and settings.MQTT_CA_CERT.strip())): ca_cert = os.sep.join([certs, settings.MQTT_CA_CERT])
+if((settings.MQTT_CLIENT_CERT and settings.MQTT_CLIENT_CERT.strip())): client_cert = os.sep.join([certs, settings.MQTT_CLIENT_CERT])
+if((settings.MQTT_CLIENT_KEY and settings.MQTT_CLIENT_KEY.strip())): client_key = os.sep.join([certs, settings.MQTT_CLIENT_KEY])
 
-if not MQTT_ENCRYPTION:
+if not settings.MQTTENCRYPTION:
     logging.warning('MQTT Transport Layer Security disabled.')
 else:
     ### Check some certificate validity here ###
@@ -3290,14 +3149,14 @@ else:
         case 1:     # Invalid CA Certificate
             logging.warning('MQTT TLS CA Certificate Expired or not Valid (%s)', ca_cert )
             logging.warning("Reverting MQTT Port to default '1883' (Unencrypted)")
-            MQTTBROKERPORT = 1883
-            MQTT_ENCRYPTION = False
+            settings.MQTTPORT = 1883
+            settings.MQTTENCRYPTION = False
 
         case 2:     # Certificate not found
             logging.warning('No MQTT TLS CA Certificate found, disabling TLS')
             logging.warning("Reverting MQTT Port to default '1883'")
-            MQTTBROKERPORT = 1883
-            MQTT_ENCRYPTION = False
+            settings.MQTTPORT = 1883
+            settings.MQTTENCRYPTION = False
 
         case 3:     # Invalid Client Certificate or Key
             logging.warning('Client Key or Certificate Expired or Invalid')
@@ -3318,28 +3177,23 @@ else:
 def main():
     global ACTIVE_CLIENT
 
- # Already set:
- # MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASSWORD, MQTT_PROTOCOL
-
-    COMFORT_PINCODE = option.comfort_login_id
     MQTT_VERSION = mqtt.MQTTv5
 
     mqttc = Comfort2(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=settings.mqtt_client_id,
         protocol=MQTT_VERSION,
-        transport=MQTT_PROTOCOL
+        transport=settings.MQTTPROTOCOL
     )
 
     mqttc.init(
-        MQTT_HOST,
-        MQTT_PORT,
-        MQTT_USER,
-        MQTT_PASSWORD,
-        COMFORT_PINCODE,
+        settings.MQTTBROKER,
+        settings.MQTTPORT,
+        settings.MQTTUSERNAME,
+        settings.MQTTPASSWORD,
+        settings.COMFORT_LOGIN_ID,
         MQTT_VERSION
     )
-
 
     mqttc.run()
 
