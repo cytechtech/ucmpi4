@@ -12,7 +12,7 @@ panel_title: "Comfort Setup"
 panel_icon: "mdi:alarm-panel-outline"
 
 codenotary: notary@home-assistant.io
-url: "https://github.com/ghall-zebsys/cytech-home-assistant-addons"
+url: "https://github.com/cytechtech/ucmpi4"
 hassio_api: true
 uart: true
 
