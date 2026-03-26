@@ -359,6 +359,14 @@ class Comfort2(mqtt.Client):
         self._last_reload_ts = 0.0
         self._reload_lock = threading.Lock()
 
+        # Debounced writes for counters and sensors
+        self.pending_counter_updates = {}
+        self.pending_sensor_updates = {}
+        self.counter_timers = {}
+        self.sensor_timers = {}
+        self.update_lock = threading.Lock()
+
+
     def handler(self, signum, frame):                 # Ctrl-Z Keyboard Interrupt
         logger.debug('SIGTSTP (Ctrl-Z) intercepted')
 
@@ -658,35 +666,178 @@ class Comfort2(mqtt.Client):
             if self.connected:
                 self.serial.write(("\x03F!%02X%02X\r" % (flag, state)).encode()) #was F!
                 settings.SAVEDTIME = datetime.now()
-        elif msg.topic.startswith(settings.DOMAIN+"/counter") and msg.topic.endswith("/set"): # counter set
-            counter = int(msg.topic.split("/")[1][7:])
-            if not msgstr.isnumeric() and not msgstr == "ON" and not msgstr == "OFF":
-                logger.debug("Invalid Counter%s Set value detected ('%s'), only 'ON', 'OFF' and Integer values allowed", str(counter), str(msgstr))
-            elif msgstr == "ON":
+        elif msg.topic.startswith(settings.DOMAIN + "/counter") and msg.topic.endswith("/set"):  # counter set
+            try:
+                counter = int(msg.topic.split("/")[1][7:])
+            except (IndexError, ValueError):
+                logger.warning("Invalid counter topic: %s", msg.topic)
+                return
+
+            if msgstr == "ON":
                 state = 255
-                if self.connected:
-                    self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(state))).encode()) 
-                    settings.SAVEDTIME = datetime.now()
             elif msgstr == "OFF":
                 state = 0
-                if self.connected:
-                    self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(state))).encode()) 
-                    settings.SAVEDTIME = datetime.now()
             else:
-                state = int(msgstr)
-                if self.connected:
-                    self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(state))).encode()) 
-                    settings.SAVEDTIME = datetime.now()
-        elif msg.topic.startswith(settings.DOMAIN+"/sensor") and msg.topic.endswith("/set"): # sensor set
-            sensor = int(msg.topic.split("/")[1][6:])
+                try:
+                    state = int(msgstr)
+                except ValueError:
+                    logger.debug(
+                        "Invalid Counter%s Set value detected ('%s'), only 'ON', 'OFF' and Integer values allowed",
+                        str(counter), str(msgstr)
+                    )
+                    return
+
+            if state < -32768 or state > 32767:
+                logger.debug(
+                    "Invalid Counter%s Set value detected ('%s'), only signed 16-bit values allowed",
+                    str(counter), str(state)
+                )
+                return
+
+            self.queue_counter_update(counter, state)
+
+        elif msg.topic.startswith(settings.DOMAIN + "/sensor") and msg.topic.endswith("/set"):  # sensor set
+            try:
+                sensor = int(msg.topic.split("/")[1][6:])
+            except (IndexError, ValueError):
+                logger.warning("Invalid sensor topic: %s", msg.topic)
+                return
+
             try:
                 state = int(msgstr)
             except ValueError:
                 logger.debug("Invalid 'sensor%s/set' value '%s'. Only Integers allowed.", sensor, msgstr)
                 return
-            if self.connected:
-                self.serial.write(("\x03s!%02X%s\r" % (sensor, self.DecimalToSigned16(state))).encode()) # sensor needs 16 bit signed number
-                settings.SAVEDTIME = datetime.now()
+
+            if state < -32768 or state > 32767:
+                logger.debug("Invalid 'sensor%s/set' value '%s'. Only signed 16-bit Integers allowed.", sensor, msgstr)
+                return
+
+            self.queue_sensor_update(sensor, state)
+ 
+  
+    def queue_counter_update(self, counter: int, value: int) -> None:
+        """Queue a counter write and debounce rapid updates."""
+        with self.update_lock:
+            current = self.pending_counter_updates.get(counter)
+            if current == value:
+                logger.info("Counter %d update already pending with value %d", counter, value)
+                return
+
+            self.pending_counter_updates[counter] = value
+
+            existing = self.counter_timers.get(counter)
+            if existing is not None:
+                existing.cancel()
+
+            timer = threading.Timer(0.5, self.flush_counter_update, args=[counter])
+            timer.daemon = True
+            self.counter_timers[counter] = timer
+            timer.start()
+
+        logger.info("Queued counter %d update to %d", counter, value)
+
+    def queue_sensor_update(self, sensor: int, value: int) -> None:
+        """Queue a sensor write and debounce rapid updates."""
+        with self.update_lock:
+            current = self.pending_sensor_updates.get(sensor)
+            if current == value:
+                logger.info("Sensor %d update already pending with value %d", sensor, value)
+                return
+
+            self.pending_sensor_updates[sensor] = value
+
+            existing = self.sensor_timers.get(sensor)
+            if existing is not None:
+                existing.cancel()
+
+            timer = threading.Timer(0.5, self.flush_sensor_update, args=[sensor])
+            timer.daemon = True
+            self.sensor_timers[sensor] = timer
+            timer.start()
+
+        logger.info("Queued sensor %d update to %d", sensor, value)
+
+    def flush_counter_update(self, counter: int) -> None:
+        """Send the final debounced counter value to Comfort."""
+        with self.update_lock:
+            value = self.pending_counter_updates.pop(counter, None)
+            self.counter_timers.pop(counter, None)
+
+        if value is None:
+            return
+
+        logger.info("Flushing counter %d update to %d", counter, value)
+
+        try:
+            self.set_counter(counter, value)
+        except Exception as e:
+            logger.exception("Failed to set counter %d to %d: %s", counter, value, e)
+
+    def flush_sensor_update(self, sensor: int) -> None:
+        """Send the final debounced sensor value to Comfort."""
+        with self.update_lock:
+            value = self.pending_sensor_updates.pop(sensor, None)
+            self.sensor_timers.pop(sensor, None)
+
+        if value is None:
+            return
+
+        logger.info("Flushing sensor %d update to %d", sensor, value)
+
+        try:
+            self.set_sensor(sensor, value)
+        except Exception as e:
+            logger.exception("Failed to set sensor %d to %d: %s", sensor, value, e)
+
+    def cancel_pending_updates(self) -> None:
+        """Cancel all pending debounced writes."""
+        with self.update_lock:
+            for timer in self.counter_timers.values():
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+
+            for timer in self.sensor_timers.values():
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+
+            self.counter_timers.clear()
+            self.sensor_timers.clear()
+            self.pending_counter_updates.clear()
+            self.pending_sensor_updates.clear()
+
+        logger.info("Cancelled all pending counter/sensor updates")
+
+    def set_counter(self, counter: int, value: int) -> None:
+        """Write a counter value to Comfort."""
+        if value < -32768 or value > 32767:
+            logger.debug("Invalid Counter%s Set value detected ('%s'), only signed 16-bit values allowed", str(counter), str(value))
+            return
+
+        if self.connected:
+            self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(value))).encode())
+            settings.SAVEDTIME = datetime.now()
+            logger.info("Sent counter %d = %d to Comfort", counter, value)
+        else:
+            logger.warning("Counter %d update ignored because Comfort is not connected", counter)
+
+    def set_sensor(self, sensor: int, value: int) -> None:
+        """Write a sensor value to Comfort."""
+        if value < -32768 or value > 32767:
+            logger.debug("Invalid sensor%s Set value detected ('%s'), only signed 16-bit values allowed", str(sensor), str(value))
+            return
+
+        if self.connected:
+            self.serial.write(("\x03s!%02X%s\r" % (sensor, self.DecimalToSigned16(value))).encode())
+            settings.SAVEDTIME = datetime.now()
+            logger.info("Sent sensor %d = %d to Comfort", sensor, value)
+        else:
+            logger.warning("Sensor %d update ignored because Comfort is not connected", sensor)
+
 
     def DecimalToSigned16(self,value):      # Returns Comfort corrected HEX string value from signed 16-bit decimal value.
         return ('{:04X}'.format((int((value & 0xff) * 0x100 + (value & 0xff00) / 0x100))) )
@@ -3002,11 +3153,7 @@ class Comfort2(mqtt.Client):
                                 logger.warning('Reset detected')
                                 settings.FIRST_LOGIN = True  # Added 29/4/2025. Enable full refresh after reset.
                                 self.login()
-                            else:
-                                if datetime.now() > (settings.SAVEDTIME + settings.TIMEOUT):  # If no command sent in 30 seconds then send keepalive.
-                                    self.serial.write("\x03cc00\r".encode()) #echo command for keepalive. cc00
-                                    settings.SAVEDTIME = datetime.now()
-                                    time.sleep(0.1)
+
                         else:
                             logger.warning("Invalid response received (%s)", line.encode())
 
