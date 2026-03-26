@@ -70,7 +70,6 @@ schema:
   broker_client_cert: str?
   broker_client_key: str?
   comfort_login_id: password?
-  comfort_cclx_file: str?
   comfort_battery_update: list(0|1|33|34|35|36|37|38|39)?
   log_verbosity: list(DEBUG|INFO|WARNING|ERROR|CRITICAL)?
   alarm_inputs: list(8|16|24|32|40|48|56|64|72|80|88|96)?
@@ -78,6 +77,6 @@ schema:
   flag_count: list(0|8|16|24|32|40|48|56|64|72|80|88|96|128|254)?
   counter_count: list(0|8|16|24|32|40|48|56|64|72|80|88|96|128|255)?
   timer_count: list(0|8|16|24|32|40|48|56|64)?
-  sensor_count: list(0|8|16|24|32)?
+  sensor_count: list(0|8|16|24|32|40|48|56|64)?
   alarm_responses: int(0,1024)?
   comfort_time: bool?
