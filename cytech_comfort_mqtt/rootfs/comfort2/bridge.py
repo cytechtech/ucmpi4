@@ -1118,6 +1118,7 @@ class Comfort2(mqtt.Client):
                              "DCSupplySlave7": str(settings.device_properties['ChargeVoltageSlave7']),
                              "InstalledSlaves": int(settings.device_properties['sem_id'])
                             })
+        logging.debug("Battery status publish: %s", MQTT_MSG)
         self.publish(discoverytopic, MQTT_MSG,qos=2,retain=False)
         time.sleep(0.1)
 
