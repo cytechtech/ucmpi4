@@ -1228,16 +1228,24 @@ class Comfort2(mqtt.Client):
         if settings.device_properties['CPUType'] != "N/A":
             self.publish(discoverytopic, MQTT_MSG, qos=2, retain=False)
             time.sleep(0.1)
+     
+        MQTT_DEVICE = {
+                        "name": "Comfort",  # Short, clean device name
+                        "identifiers": ["comfort_device"],
+                        "manufacturer": "Cytech Technology Pte Ltd",
+                        "hw_version": str(settings.device_properties['ComfortHardwareModel']),
+                        "serial_number": settings.device_properties['SerialNumber'],
+                        "sw_version": str(settings.device_properties['Version']),
 
-        MQTT_DEVICE = { "name": settings.models[int(settings.device_properties['ComfortFileSystem'])] if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown",
-                            "identifiers": ["comfort_device"],
-                            "manufacturer":"Cytech Technology Pte Ltd",
-                            "hw_version":str(settings.device_properties['ComfortHardwareModel']),
-                            "serial_number": settings.device_properties['SerialNumber'],
-                            "sw_version":str(settings.device_properties['Version']),
-                            "model": settings.device_properties['ComfortHardwareModel'],
-                            "via_device": "cytech_comfort_mqtt"
+                        # Use the readable model name instead of numeric hardware model
+                        "model": settings.models[int(settings.device_properties['ComfortFileSystem'])]
+                            if int(settings.device_properties['ComfortFileSystem']) in settings.models
+                            else "Unknown",
+
+                        "via_device": "cytech_comfort_mqtt"
                         }
+     
+     
         # Store the Comfort device dict for reload/discovery republish
         MQTT_DEVICE_COMFORT = MQTT_DEVICE
 
@@ -2136,7 +2144,7 @@ class Comfort2(mqtt.Client):
             except ValueError:
                 continue
 
-            if i < 1 or i > settings.UI_COUNTER_COUNT:  # Only publish counters that are within the UI-supported range
+            if i < 0 or i >= settings.UI_COUNTER_COUNT:
                 continue
 
 
@@ -2201,7 +2209,7 @@ class Comfort2(mqtt.Client):
             except ValueError:
                 continue
 
-            if i < 1 or i > settings.UI_SENSOR_COUNT:  # Only publish sensors that are within the UI-supported range
+            if i < 0 or i >= settings.UI_SENSOR_COUNT:  # Only publish sensors that are within the UI-supported range
                 continue
 
             # logger.info(
