@@ -1122,6 +1122,8 @@ class Comfort2(mqtt.Client):
         self.publish(discoverytopic, MQTT_MSG,qos=2,retain=False)
         time.sleep(0.1)
 
+        self.PublishBatteryVoltageStates() # publish the voltages as individual topics for easier use in HA without needing to parse JSON.
+
     def UpdateDeviceInfo(self, _file = False):
 
         #option = parser.parse_args()
@@ -1282,6 +1284,7 @@ class Comfort2(mqtt.Client):
             self.publish_timer_discovery(MQTT_DEVICE_COMFORT)
             self._timers_discovery_published = True
 
+        self.PublishBatteryVoltageDiscovery()
 
         discoverytopic = f"homeassistant/sensor/{settings.DOMAIN}/comfort_state/config"
         MQTT_MSG=json.dumps({"name": "State",
@@ -1851,6 +1854,7 @@ class Comfort2(mqtt.Client):
                 self.publish_counter_discovery(mqtt_device_comfort)
                 self.publish_sensor_discovery(mqtt_device_comfort)
                 self.publish_timer_discovery(mqtt_device_comfort)
+                self.PublishBatteryVoltageDiscovery()
             else:
                 logger.warning("MQTT_DEVICE_COMFORT not set yet; skipping discovery publish on reload")
 
@@ -2321,6 +2325,88 @@ class Comfort2(mqtt.Client):
 
             self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
             time.sleep(0.01)
+
+
+    def PublishBatteryVoltageDiscovery(self):
+        """Publish MQTT discovery for main battery and DC supply voltage sensors."""
+        device_block = {
+            "identifiers": [settings.DOMAIN],
+            "name": settings.ALARMNAME if hasattr(settings, "ALARMNAME") else "Comfort II ULTRA",
+            "manufacturer": "Cytech",
+            "model": "Comfort"
+        }
+
+        availability = [
+            {"topic": settings.ALARMAVAILABLETOPIC},
+            {"topic": settings.ALARMCONNECTEDTOPIC}
+        ]
+
+        battery_state_topic = settings.DOMAIN + "/alarm/battery_main_voltage"
+        dc_state_topic = settings.DOMAIN + "/alarm/dc_supply_main_voltage"
+
+        battery_discovery_topic = "homeassistant/sensor/{}/battery_main_voltage/config".format(settings.DOMAIN)
+        dc_discovery_topic = "homeassistant/sensor/{}/dc_supply_main_voltage/config".format(settings.DOMAIN)
+
+        battery_payload = {
+            "name": "Battery Main Voltage",
+            "unique_id": "{}_battery_main_voltage".format(settings.DOMAIN),
+            "object_id": "{}_battery_main_voltage".format(settings.DOMAIN),
+            "state_topic": battery_state_topic,
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "icon": "mdi:car-battery",
+            "availability": availability,
+            "availability_mode": "all",
+            "device": device_block
+        }
+
+        dc_payload = {
+            "name": "DC Supply Main Voltage",
+            "unique_id": "{}_dc_supply_main_voltage".format(settings.DOMAIN),
+            "object_id": "{}_dc_supply_main_voltage".format(settings.DOMAIN),
+            "state_topic": dc_state_topic,
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "icon": "mdi:flash",
+            "availability": availability,
+            "availability_mode": "all",
+            "device": device_block
+        }
+
+        self.publish(battery_discovery_topic, json.dumps(battery_payload), qos=2, retain=True)
+        time.sleep(0.1)
+        self.publish(dc_discovery_topic, json.dumps(dc_payload), qos=2, retain=True)
+        time.sleep(0.1)
+
+
+    def PublishBatteryVoltageStates(self):
+        """Publish main battery and DC supply voltage states as individual MQTT sensor topics."""
+        battery_topic = settings.DOMAIN + "/alarm/battery_main_voltage"
+        dc_topic = settings.DOMAIN + "/alarm/dc_supply_main_voltage"
+
+        battery_main = str(settings.device_properties.get("BatteryVoltageMain", "-1"))
+        dc_supply_main = str(settings.device_properties.get("ChargeVoltageMain", "-1"))
+
+        logging.debug(
+            "Battery voltage state publish: battery_main=%s dc_supply_main=%s",
+            battery_main,
+            dc_supply_main
+        )
+
+        if battery_main != "-1":
+            self.publish(battery_topic, battery_main, qos=2, retain=True)
+        else:
+            self.publish(battery_topic, "", qos=2, retain=True)
+        time.sleep(0.1)
+
+        if dc_supply_main != "-1":
+            self.publish(dc_topic, dc_supply_main, qos=2, retain=True)
+        else:
+            self.publish(dc_topic, "", qos=2, retain=True)
+        time.sleep(0.1)
+
 
 
 

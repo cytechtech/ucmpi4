@@ -523,9 +523,11 @@ class Comfort_D_SystemVoltageReport(object):
             if query_type == 1:
                 #voltage = str(format(round(((value/255)*15.522),2), ".2f")) if value < 255 else '-1'  # Formula used for Batteries.
                 if settings.ACFail == False:
-                    voltage =  str(format(round(((value/255)*(3.3/2.7)*12.7 - 0.75),2), ".2f")) if value < 255 else '-1'  # - testing.
+                    voltage = str(format(round((value / 256) * 15.5, 2), ".2f")) if 0 <= value <= 255 else "-1"
+                   # voltage =  str(format(round(((value/255)*(3.3/2.7)*12.7 - 0.75),2), ".2f")) if value < 255 else '-1'  # - testing.
                 else:
-                    voltage =  str(format(round(((value/255)*(3.3/2.7)*12.7 + 0.35),2), ".2f")) if value < 255 else '-1'  # - testing.
+                    voltage = str(format(round((value / 256) * 15.5, 2), ".2f")) if 0 <= value <= 255 else "-1"
+                   # voltage =  str(format(round(((value/255)*(3.3/2.7)*12.7 + 0.35),2), ".2f")) if value < 255 else '-1'  # - testing.
 
                 #voltage = str(format(round(((value/255)*15.5),2), ".2f")) if value < 255 else '-1'  # Formula used for Batteries.
                 if id == 0:
@@ -539,7 +541,8 @@ class Comfort_D_SystemVoltageReport(object):
                     return
             elif query_type == 2:
                 #voltage = str(format(round(((value/255)*(3.3/2.71)*15),2), ".2f")) if value < 255 else '-1'  # New Formula used for DC Supply voltage.
-                voltage =  str(format(round(((value/255)*(3.3/2.7)*14.9),2), ".2f")) if value < 255 else '-1'  # New Formula used for DC Supply voltage - testing.
+                voltage = str(format(round((value / 256) * 15.5, 2), ".2f")) if 0 <= value <= 255 else "-1"
+                # voltage =  str(format(round(((value/255)*(3.3/2.7)*14.9),2), ".2f")) if value < 255 else '-1'  # New Formula used for DC Supply voltage - testing.
                 if id == 0:
                     settings.device_properties[settings.ChargerVoltageNameList[(x-6)/2]] = voltage
                     settings.ChargerVoltageList[(x-6)/2] = voltage
