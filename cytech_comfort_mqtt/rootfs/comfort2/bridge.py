@@ -397,6 +397,8 @@ class Comfort2(mqtt.Client):
             self.clear_counter_discovery()
             self.clear_sensor_discovery()
             self.clear_timer_discovery()
+            self.ClearBatteryVoltageDiscovery()
+
             time.sleep(0.25)    # Short wait for MQTT to be ready to accept commands.
 
             # You need to subscribe to your own topics to enable publish messages activating Comfort entities.
@@ -1834,6 +1836,8 @@ class Comfort2(mqtt.Client):
             self.clear_counter_discovery()
             self.clear_sensor_discovery()
             self.clear_timer_discovery()
+            self.ClearBatteryVoltageDiscovery()
+
 
 
             data_cclx = Path("/data/site.cclx")
@@ -1932,6 +1936,21 @@ class Comfort2(mqtt.Client):
             time.sleep(0.005)
 
         #logging.info("clear_timer_discovery: END")
+
+
+    def ClearBatteryVoltageDiscovery(self):
+        """Remove MQTT discovery for battery and DC voltage sensors."""
+
+        topics = [
+            f"homeassistant/sensor/{settings.DOMAIN}/battery_main_voltage/config",
+            f"homeassistant/sensor/{settings.DOMAIN}/dc_supply_main_voltage/config"
+        ]
+
+        for topic in topics:
+            logging.info("Clearing discovery topic: %s", topic)
+            self.publish(topic, "", qos=2, retain=True)
+            time.sleep(0.1)
+
 
 
     def _ha_discovery_topic(self, component: str, object_id: str) -> str:
