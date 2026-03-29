@@ -604,7 +604,7 @@ class Comfort2(mqtt.Client):
                 else:
                     Command = "\x03D?" + ID + "01\r"
                     self.serial.write(Command.encode()) # Battery Status Update
-                    time.sleep(0.1)
+                    time.sleep(0.01)
                     Command = "\x03D?" + ID + "02\r"
                     self.serial.write(Command.encode()) # DC Supply Status Update
                     time.sleep(0.1)
@@ -1013,72 +1013,72 @@ class Comfort2(mqtt.Client):
             logger.info("Requesting Bypassed Zones")
             self.serial.write("\x03b?00\r".encode())       # b?00 Bypassed Zones first
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             
             #get Comfort FileSystem
             self.serial.write("\x03V?\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             
             #get CPU Type
             self.serial.write("\x03u?01\r".encode())         # Get CPU type for Main board.
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
 
             #get the battery and DC supply status for mainboard and slaves (if ARM or Toshiba CPU)
             self.serial.write("\x03D?0000\r".encode())       # Mainboard Battery and DC Supply Status
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
                        
             # #get HW model
             self.serial.write("\x03EL\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
 
             #Used for Unique ID
             self.serial.write("\x03UL7FF904\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             
             #get Mainboard Serial Number
             self.serial.write("\x03SN01\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             
             self.serial.write("\x03M?\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             # #get all zone input states
             self.serial.write("\x03Z?\r".encode())       # Comfort Zones/Inputs
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
 
             #get all output states
             if ALARMNUMBEROFOUTPUTS > 0:
                 self.serial.write("\x03Y?\r".encode())
                 settings.SAVEDTIME = datetime.now()
-                time.sleep(0.1)
+                time.sleep(0.01)
 
             #get all flag states
             self.serial.write("\x03f?00\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             #get Alarm Status Information
             self.serial.write("\x03S?\r".encode())       # S? Status Request
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             #get Alarm Additional Information
             self.serial.write("\x03a?\r".encode())       # a? Status Request - For Future Use !!!
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
 
             #get all sensor values. 0 - 31
             self.serial.write("\x03r?010010\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
             self.serial.write("\x03r?011010\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.1)
+            time.sleep(0.01)
 
             #get all counter values
             for i in range(0, int((settings.ALARMNUMBEROFCOUNTERS+1) / 16)):          # Counters 0 to 254 Using 256/16 = 16 iterations
@@ -1090,17 +1090,17 @@ class Comfort2(mqtt.Client):
                 time.sleep(0.1)
             
             self.publish(settings.ALARMAVAILABLETOPIC, 1,qos=2,retain=True)
-            time.sleep(0.1)
+            time.sleep(0.01)
             self.publish(settings.ALARMLWTTOPIC, 'Online',qos=2,retain=True)
-            time.sleep(0.1)
+            time.sleep(0.01)
             self.publish(settings.ALARMMESSAGETOPIC, "",qos=2,retain=True)       # Empty string removes topic.
-            time.sleep(0.1)
+            time.sleep(0.01)
 
 
 
             if settings.BROKERCONNECTED and settings.COMFORTCONNECTED:
                 self.publish(settings.ALARMCONNECTEDTOPIC, 1,qos=2,retain=True)
-                time.sleep(0.1)
+                time.sleep(0.01)
 
 
     def UpdateBatteryStatus(self):
@@ -2534,7 +2534,7 @@ class Comfort2(mqtt.Client):
                             if datetime.now() > settings.SAVEDTIME + settings.TIMEOUT:            #
                                 self.serial.write("\x03cc00\r".encode()) #echo command for keepalive
                                 settings.SAVEDTIME = datetime.now()
-                                time.sleep(0.1)
+                                time.sleep(0.01)
 
                         if self.check_string(line):         # Check for "(\x03[a-zA-Z0-9]*)$" in complete line. Might be redundant as same check done above.
                             pattern = re.compile(r'(\x03[a-zA-Z0-9!?]*)$')      # Extract 'legal' characters from line.
@@ -2896,7 +2896,6 @@ class Comfort2(mqtt.Client):
                                 self.UpdateDeviceInfo(True)     # Update Device properties. Issue with no CCLX file and ComfortFileSyste, = Null.
 
                             elif line[1:3] == "D?":
-                                logger.info("D? handler hit: %s", line)
                                 DLMsg = Comfort_D_SystemVoltageReport(line[1:])
                                 logger.info(
                                     "After parse: BatteryVoltageMain=%s ChargeVoltageMain=%s BatteryStatus=%s ChargerStatus=%s",
