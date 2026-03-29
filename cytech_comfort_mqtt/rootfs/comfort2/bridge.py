@@ -2895,12 +2895,18 @@ class Comfort2(mqtt.Client):
                                 logging.debug("Hardware Model %s", str(settings.device_properties['ComfortHardwareModel']))
                                 self.UpdateDeviceInfo(True)     # Update Device properties. Issue with no CCLX file and ComfortFileSyste, = Null.
 
-                            elif line[1:3] == "D?":       # Get Battery/Charge or DC Supply voltage. ARM/Toshiba + CM-9001 Only.
-
-                                # Determine Battery/Charge Voltage and Device ID. Save Values in Comfort_D_SystemVoltageReport
-                                DLMsg = Comfort_D_SystemVoltageReport(line[1:])     # Return value not used currently.
+                            elif line[1:3] == "D?":
+                                logger.info("D? handler hit: %s", line)
+                                DLMsg = Comfort_D_SystemVoltageReport(line[1:])
+                                logger.info(
+                                    "After parse: BatteryVoltageMain=%s ChargeVoltageMain=%s BatteryStatus=%s ChargerStatus=%s",
+                                    settings.device_properties.get("BatteryVoltageMain"),
+                                    settings.device_properties.get("ChargeVoltageMain"),
+                                    settings.device_properties.get("BatteryStatus"),
+                                    settings.device_properties.get("ChargerStatus"),
+                                )
                                 self.UpdateBatteryStatus()
-                                #self.UpdateDeviceInfo(True)     # Update Device properties.
+
                                 
                             elif line[1:5] == "SN01":       # Comfort Encoded Serial Number - Used for Refresh Key
                                 SNMsg = ComfortSN_SerialNumberReport(line[1:])
