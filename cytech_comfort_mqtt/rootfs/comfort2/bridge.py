@@ -226,24 +226,15 @@ ACTIVE_CLIENT = None
 MQTT_DEVICE_COMFORT = None  # Comfort device dict used for MQTT discovery republish on reload
 
 class LoggedSerial(serial.Serial):
-    """Serial wrapper that logs all TX/RX, even fragmented ASCII-hex writes."""
+    """Serial wrapper with concise TX/RX logging."""
+
     def write(self, data):
-        # Try decode ASCII (Comfort uses ASCII hex)
         try:
             text = data.decode("ascii", errors="replace")
         except Exception:
             text = repr(data)
 
-        clean = "".join(c for c in text if c.upper() in "0123456789ABCDEF")
-
-        #logger.info("SERIAL TX RAW: %r", data)
-        logger.info("SERIAL TX ASCII: %r", text)
-        if clean:
-            logger.info(
-                "SERIAL TX HEX-GROUPED: %s",
-                " ".join(clean[i:i+2] for i in range(0, len(clean), 2))
-            )
-
+        logger.debug("TX: %r", text)
         return super().write(data)
 
     def read(self, size=1):
@@ -254,15 +245,7 @@ class LoggedSerial(serial.Serial):
             except Exception:
                 text = repr(data)
 
-            clean = "".join(c for c in text if c.upper() in "0123456789ABCDEF")
-
-           # logger.info("SERIAL RX RAW: %r", data)
-            logger.info("SERIAL RX ASCII: %r", text)
-            if clean:
-                logger.info(
-                    "SERIAL RX HEX-GROUPED: %s",
-                    " ".join(clean[i:i+2] for i in range(0, len(clean), 2))
-                )
+            logger.debug("RX: %r", text)
 
         return data
 
@@ -2392,10 +2375,12 @@ class Comfort2(mqtt.Client):
         except Exception:
             installed_slaves = 0
 
-        # Clamp to valid SEM range
         installed_slaves = max(0, min(installed_slaves, 7))
 
-        logger.info("Publishing battery voltage discovery for main board and %d installed SEM boards", installed_slaves)
+        logger.info(
+            "Publishing battery voltage discovery for main board and %d installed SEM boards",
+            installed_slaves
+        )
 
         # Clear retained discovery for SEM boards above the installed count
         for sem in range(installed_slaves + 1, 8):
@@ -2423,7 +2408,6 @@ class Comfort2(mqtt.Client):
             }
         ]
 
-        # Add installed SEM board sensors only
         for sem in range(1, installed_slaves + 1):
             sensors.append({
                 "suffix": f"battery_slave{sem}_voltage",
@@ -2458,83 +2442,10 @@ class Comfort2(mqtt.Client):
             self.publish(discovery_topic, json.dumps(payload), qos=2, retain=True)
             logger.info("Published battery voltage discovery: %s", discovery_topic)
             time.sleep(0.05)
-            """Publish MQTT discovery for main battery/DC voltage sensors and installed SEM boards only."""
-            device_block = {
-                "identifiers": [settings.DOMAIN],
-                "name": settings.ALARMNAME if hasattr(settings, "ALARMNAME") else "Comfort II ULTRA",
-                "manufacturer": "Cytech",
-                "model": "Comfort"
-            }
-
-            availability = [
-                {
-                    "topic": settings.ALARMAVAILABLETOPIC,
-                    "payload_available": "1",
-                    "payload_not_available": "0"
-                },
-                {
-                    "topic": settings.ALARMCONNECTEDTOPIC,
-                    "payload_available": "1",
-                    "payload_not_available": "0"
-                }
-            ]
-
-            try:
-                installed_slaves = int(settings.device_properties.get("sem_id", 0))
-            except Exception:
-                installed_slaves = 0
-
-            # clamp to valid SEM range
-            installed_slaves = max(0, min(installed_slaves, 7))
-
-            sensors = [
-                {
-                    "suffix": "battery_main_voltage",
-                    "name": "Battery Main Voltage",
-                    "icon": "mdi:car-battery"
-                },
-                {
-                    "suffix": "dc_supply_main_voltage",
-                    "name": "DC Supply Main Voltage",
-                    "icon": "mdi:flash"
-                }
-            ]
-
-            for sem in range(1, installed_slaves + 1):
-                sensors.append({
-                    "suffix": f"battery_slave{sem}_voltage",
-                    "name": f"Battery SEM {sem} Voltage",
-                    "icon": "mdi:car-battery"
-                })
-                sensors.append({
-                    "suffix": f"dc_supply_slave{sem}_voltage",
-                    "name": f"DC Supply SEM {sem} Voltage",
-                    "icon": "mdi:flash"
-                })
-
-            for sensor in sensors:
-                state_topic = f"{settings.DOMAIN}/alarm/{sensor['suffix']}"
-                discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/{sensor['suffix']}/config"
-
-                payload = {
-                    "name": sensor["name"],
-                    "unique_id": f"{settings.DOMAIN}_{sensor['suffix']}",
-                    "object_id": f"{settings.DOMAIN}_{sensor['suffix']}",
-                    "state_topic": state_topic,
-                    "unit_of_measurement": "V",
-                    "device_class": "voltage",
-                    "state_class": "measurement",
-                    "suggested_display_precision": 2,
-                    "icon": sensor["icon"],
-                    "availability": availability,
-                    "availability_mode": "all",
-                    "device": device_block
-                }
-
-                self.publish(discovery_topic, json.dumps(payload), qos=2, retain=True)
-                time.sleep(0.05)
 
 
+
+    
     def PublishBatteryVoltageStates(self):
         """Publish main battery/DC voltages and installed SEM board voltages.
         Also clears retained state topics for SEM boards that are no longer installed.
@@ -2869,9 +2780,9 @@ class Comfort2(mqtt.Client):
 
 
                             elif line[1:3] == "s?":
-                                ipMsgSQ = ComfortCTCounterActivationReport(line[1:])
-                                sensor_id = ipMsgSQ.counter
-                                value = ipMsgSQ.state
+                                ipMsgSQ = Comfort_RSensorActivationReport(line[1:])
+                                sensor_id = ipMsgSQ.sensor
+                                value = ipMsgSQ.value
                                 topic = settings.ALARMSENSORTOPIC % sensor_id
 
                                 try:
@@ -2896,8 +2807,8 @@ class Comfort2(mqtt.Client):
                                 )
 
                             elif line[1:3] == "sr" and settings.CacheState:
-                                ipMsgSR = ComfortCTCounterActivationReport(line[1:])
-                                sensor_id = ipMsgSR.counter
+                                ipMsgSR = Comfort_RSensorActivationReport(line[1:])
+                                sensor_id = ipMsgSR.sensor
                                 value = ipMsgSR.value
                                 topic = settings.ALARMSENSORTOPIC % sensor_id
 
@@ -2921,7 +2832,6 @@ class Comfort2(mqtt.Client):
                                     qos=2,
                                     retain=True
                                 )
-
 
                             elif line[1:3] == "TR":     # Timer Reports (Comfort stops reporting after a while)
 
