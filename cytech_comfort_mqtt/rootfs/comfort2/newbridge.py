@@ -2713,10 +2713,12 @@ class Comfort2(mqtt.Client):
                 if not line:
                     continue
 
+                logger.debug("RX: %s", line[1:])
+
                 try:
                     self.serial_queue.put_nowait(line)
                 except:
-                    logger.warning("Serial queue full, dropping: %r", line)
+                    logger.warning("Serial queue full, dropping message")
 
             except Exception as e:
                 logger.error("Serial thread error: %s", e)
@@ -2735,7 +2737,9 @@ class Comfort2(mqtt.Client):
 
             line = match.group(1)
 
-            logger.debug("RX: %s", line[1:])
+            # Optional: remove cc00 filter entirely if not needed
+            if line[1:] != "cc00":
+                logger.debug("RX: %s", line[1:])
 
             self.handle_serial_line(line)
 
