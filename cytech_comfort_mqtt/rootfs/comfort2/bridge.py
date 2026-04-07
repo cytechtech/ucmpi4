@@ -2174,6 +2174,7 @@ class Comfort2(mqtt.Client):
                 "state_topic": state_topic,
                 "command_topic": command_topic,
                 "value_template": "{{ value | int }}",
+                "suggested_display_precision": 0,
                 "command_template": "{{ value }}",
                 "availability": [
                     {
@@ -2228,6 +2229,7 @@ class Comfort2(mqtt.Client):
                 "state_topic": state_topic,
                 "command_topic": command_topic,
                 "value_template": "{{ value | int }}",
+                "suggested_display_precision": 0,
                 "command_template": "{{ value }}",
                 "availability": [
                     {
