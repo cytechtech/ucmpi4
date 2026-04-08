@@ -1886,15 +1886,28 @@ class Comfort2(mqtt.Client):
 
     def clear_counter_discovery(self):
         for i in range(0, int(settings.ALARMNUMBEROFCOUNTERS)):
-            topic = f"homeassistant/number/{settings.DOMAIN}/counter{i:03d}/config"
-            self.publish(topic, "", qos=2, retain=True)
+
+            # Clear number entity
+            topic_number = f"homeassistant/number/{settings.DOMAIN}/counter{i:03d}/config"
+            self.publish(topic_number, "", qos=2, retain=True)
+
+            # Clear display sensor entity
+            topic_sensor = f"homeassistant/sensor/{settings.DOMAIN}/counter{i:03d}_value/config"
+            self.publish(topic_sensor, "", qos=2, retain=True)
+
             time.sleep(0.005)
 
     def clear_sensor_discovery(self):
-
         for i in range(0, int(settings.ALARMNUMBEROFSENSORS)):
-            topic = f"homeassistant/number/{settings.DOMAIN}/sensor{i:03d}/config"
-            self.publish(topic, "", qos=2, retain=True)
+
+            # Clear number entity
+            topic_number = f"homeassistant/number/{settings.DOMAIN}/sensor{i:03d}/config"
+            self.publish(topic_number, "", qos=2, retain=True)
+
+            # Clear display sensor entity
+            topic_sensor = f"homeassistant/sensor/{settings.DOMAIN}/sensor{i:03d}_value/config"
+            self.publish(topic_sensor, "", qos=2, retain=True)
+
             time.sleep(0.005)
 
 
@@ -2163,31 +2176,33 @@ class Comfort2(mqtt.Client):
             else:
                 counter_name = f"Counter{i:03d}"
 
-            discovery_topic = f"homeassistant/number/{settings.DOMAIN}/counter{i:03d}/config"
             state_topic = settings.ALARMCOUNTERTOPIC % i
             command_topic = settings.ALARMCOUNTERCOMMANDTOPIC % i
 
-            mqtt_msg = json.dumps({
+            availability = [
+                {
+                    "topic": settings.ALARMAVAILABLETOPIC,
+                    "payload_available": "1",
+                    "payload_not_available": "0",
+                },
+                {
+                    "topic": settings.ALARMCONNECTEDTOPIC,
+                    "payload_available": "1",
+                    "payload_not_available": "0",
+                },
+            ]
+
+            # Editable number entity
+            number_discovery_topic = f"homeassistant/number/{settings.DOMAIN}/counter{i:03d}/config"
+            number_msg = json.dumps({
                 "name": counter_name,
                 "unique_id": f"{settings.DOMAIN}_counter{i:03d}",
                 "object_id": f"{settings.DOMAIN}_counter{i:03d}",
                 "state_topic": state_topic,
                 "command_topic": command_topic,
                 "value_template": "{{ value | int }}",
-                "suggested_display_precision": 0,
                 "command_template": "{{ value }}",
-                "availability": [
-                    {
-                        "topic": settings.ALARMAVAILABLETOPIC,
-                        "payload_available": "1",
-                        "payload_not_available": "0",
-                    },
-                    {
-                        "topic": settings.ALARMCONNECTEDTOPIC,
-                        "payload_available": "1",
-                        "payload_not_available": "0",
-                    },
-                ],
+                "availability": availability,
                 "availability_mode": "all",
                 "mode": "box",
                 "min": -32768,
@@ -2196,8 +2211,24 @@ class Comfort2(mqtt.Client):
                 "icon": "mdi:counter",
                 "device": mqtt_device,
             })
+            self.publish(number_discovery_topic, number_msg, qos=2, retain=True)
+            time.sleep(0.01)
 
-            self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
+            # Display-only sensor entity
+            sensor_discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/counter{i:03d}_value/config"
+            sensor_msg = json.dumps({
+                "name": f"{counter_name} Value",
+                "unique_id": f"{settings.DOMAIN}_counter{i:03d}_value",
+                "object_id": f"{settings.DOMAIN}_counter{i:03d}_value",
+                "state_topic": state_topic,
+                "value_template": "{{ value | int }}",
+                "suggested_display_precision": 0,
+                "availability": availability,
+                "availability_mode": "all",
+                "icon": "mdi:counter",
+                "device": mqtt_device,
+            })
+            self.publish(sensor_discovery_topic, sensor_msg, qos=2, retain=True)
             time.sleep(0.01)
 
 
@@ -2218,31 +2249,33 @@ class Comfort2(mqtt.Client):
             else:
                 sensor_name = f"Sensor{i:03d}"
 
-            discovery_topic = f"homeassistant/number/{settings.DOMAIN}/sensor{i:03d}/config"
             state_topic = settings.ALARMSENSORTOPIC % i
             command_topic = settings.ALARMSENSORCOMMANDTOPIC % i
 
-            mqtt_msg = json.dumps({
+            availability = [
+                {
+                    "topic": settings.ALARMAVAILABLETOPIC,
+                    "payload_available": "1",
+                    "payload_not_available": "0",
+                },
+                {
+                    "topic": settings.ALARMCONNECTEDTOPIC,
+                    "payload_available": "1",
+                    "payload_not_available": "0",
+                },
+            ]
+
+            # Editable number entity
+            number_discovery_topic = f"homeassistant/number/{settings.DOMAIN}/sensor{i:03d}/config"
+            number_msg = json.dumps({
                 "name": sensor_name,
                 "unique_id": f"{settings.DOMAIN}_sensor{i:03d}",
                 "object_id": f"{settings.DOMAIN}_sensor{i:03d}",
                 "state_topic": state_topic,
                 "command_topic": command_topic,
                 "value_template": "{{ value | int }}",
-                "suggested_display_precision": 0,
                 "command_template": "{{ value }}",
-                "availability": [
-                    {
-                        "topic": settings.ALARMAVAILABLETOPIC,
-                        "payload_available": "1",
-                        "payload_not_available": "0",
-                    },
-                    {
-                        "topic": settings.ALARMCONNECTEDTOPIC,
-                        "payload_available": "1",
-                        "payload_not_available": "0",
-                    },
-                ],
+                "availability": availability,
                 "availability_mode": "all",
                 "mode": "box",
                 "min": -32768,
@@ -2251,8 +2284,24 @@ class Comfort2(mqtt.Client):
                 "icon": "mdi:gauge",
                 "device": mqtt_device,
             })
+            self.publish(number_discovery_topic, number_msg, qos=2, retain=True)
+            time.sleep(0.01)
 
-            self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
+            # Display-only sensor entity
+            sensor_discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/sensor{i:03d}_value/config"
+            sensor_msg = json.dumps({
+                "name": f"{sensor_name} Value",
+                "unique_id": f"{settings.DOMAIN}_sensor{i:03d}_value",
+                "object_id": f"{settings.DOMAIN}_sensor{i:03d}_value",
+                "state_topic": state_topic,
+                "value_template": "{{ value | int }}",
+                "suggested_display_precision": 0,
+                "availability": availability,
+                "availability_mode": "all",
+                "icon": "mdi:gauge",
+                "device": mqtt_device,
+            })
+            self.publish(sensor_discovery_topic, sensor_msg, qos=2, retain=True)
             time.sleep(0.01)
 
 
