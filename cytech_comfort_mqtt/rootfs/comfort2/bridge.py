@@ -1990,31 +1990,31 @@ class Comfort2(mqtt.Client):
     ####  MQTT Discovery for Inputs, Outputs, Flags, Counters, Timers and Users ####
 
     def publish_output_discovery(self, mqtt_device):
-        # Output states are simple numeric strings: "0" or "1"
-
         try:
             max_outputs = int(getattr(settings, "COMFORT_OUTPUTS", 0) or 0)
-            logger.info("publish_output_discovery: COMFORT_OUTPUTS is %r ",
-                        getattr(settings, "COMFORT_OUTPUTS", None))
-        except Exception:
+            logger.info("publish_output_discovery: COMFORT_OUTPUTS=%r", getattr(settings, "COMFORT_OUTPUTS", None))
+        except Exception as e:
+            logger.exception("Error reading COMFORT_OUTPUTS: %s", e)
             max_outputs = 0
 
         if max_outputs <= 0:
-            logger.warning("publish_output_discovery: COMFORT_OUTPUTS is %r; no outputs will be published",
-                        getattr(settings, "COMFORT_OUTPUTS", None))
+            logger.warning("publish_output_discovery: COMFORT_OUTPUTS invalid (%r)", getattr(settings, "COMFORT_OUTPUTS", None))
             return
 
-
         for i in range(1, max_outputs + 1):
-            logger.warning("Publishing output discovery entity %03d of %03d", i, max_outputs)
+            logger.warning("OUTPUT DISCOVERY START %03d/%03d", i, max_outputs)
+
             props_str = settings.output_properties.get(str(i))
             props_int = settings.output_properties.get(i)
             props = settings.output_properties.get(str(i), settings.output_properties.get(i, {}))
 
-            # logger.info(
-            #     "publish_output_discovery: output=%s props_str=%r props_int=%r chosen=%r",
-            #     i, props_str, props_int, props
-            # )
+            logger.debug(
+                "OUTPUT %03d props_str=%r (%s) props_int=%r (%s) chosen=%r (%s)",
+                i,
+                props_str, type(props_str),
+                props_int, type(props_int),
+                props, type(props)
+            )
 
             if isinstance(props, dict):
                 name = (props.get("Name") or props.get("name") or f"Output{i:03d}").strip()
@@ -2022,13 +2022,6 @@ class Comfort2(mqtt.Client):
                 name = props.strip() or f"Output{i:03d}"
             else:
                 name = f"Output{i:03d}"
-
-            # logger.info(
-            #     "publish_output_discovery: output=%s resolved_name=%r discovery_topic=%s",
-            #     i, name, f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config"
-            # )
-
-
 
             state_topic = settings.ALARMOUTPUTTOPIC % i
             command_topic = settings.ALARMOUTPUTCOMMANDTOPIC % i
@@ -2061,22 +2054,55 @@ class Comfort2(mqtt.Client):
                 "device": mqtt_device,
             }
 
+            logger.warning(
+                "OUTPUT DISCOVERY: i=%03d topic=%s unique_id=%s object_id=%s state_topic=%s command_topic=%s",
+                i,
+                discovery_topic,
+                payload["unique_id"],
+                payload["object_id"],
+                payload["state_topic"],
+                payload["command_topic"],
+            )
+
+            logger.debug("OUTPUT PAYLOAD %03d: %s", i, json.dumps(payload, sort_keys=True))
+
             self.publish(discovery_topic, json.dumps(payload), qos=1, retain=True)
             time.sleep(0.05)
 
 
     def publish_input_discovery(self, mqtt_device):
-        max_inputs = int(settings.COMFORT_INPUTS)
+        try:
+            max_inputs = int(settings.COMFORT_INPUTS)
+            logger.info("publish_input_discovery: COMFORT_INPUTS=%r", settings.COMFORT_INPUTS)
+        except Exception as e:
+            logger.exception("Error reading COMFORT_INPUTS: %s", e)
+            max_inputs = 0
+
+        if max_inputs <= 0:
+            logger.warning("publish_input_discovery: COMFORT_INPUTS invalid (%r)", settings.COMFORT_INPUTS)
+            return
 
         for i in range(1, max_inputs + 1):
-            logger.warning("Publishing input discovery entity %03d of %03d", i, max_inputs)
+            logger.warning("INPUT DISCOVERY START %03d/%03d", i, max_inputs)
+
             name = f"Zone{i:03d}"
             device_class = None
 
-            if settings.ZONEMAPFILE:
-                props = settings.input_properties.get(str(i))
-                if props:
+            props = settings.input_properties.get(str(i)) if settings.ZONEMAPFILE else None
+
+            logger.debug(
+                "INPUT %03d props=%r (%s) ZONEMAPFILE=%s",
+                i,
+                props,
+                type(props),
+                settings.ZONEMAPFILE
+            )
+
+            if props:
+                try:
                     name = props.get("Name") or name
+                except Exception:
+                    logger.warning("INPUT %03d props malformed: %r", i, props)
 
             state_topic = settings.ALARMINPUTTOPIC % i
             discovery_topic = f"homeassistant/binary_sensor/{settings.DOMAIN}/input{i:03d}/config"
@@ -2107,8 +2133,20 @@ class Comfort2(mqtt.Client):
             if device_class:
                 payload["device_class"] = device_class
 
+            logger.warning(
+                "INPUT DISCOVERY: i=%03d topic=%s unique_id=%s object_id=%s state_topic=%s",
+                i,
+                discovery_topic,
+                payload["unique_id"],
+                payload["object_id"],
+                payload["state_topic"],
+            )
+
+            logger.debug("INPUT PAYLOAD %03d: %s", i, json.dumps(payload, sort_keys=True))
+
             self.publish(discovery_topic, json.dumps(payload), qos=1, retain=True)
             time.sleep(0.05)
+
 
 
     def publish_flag_discovery(self, mqtt_device):
@@ -2430,7 +2468,7 @@ class Comfort2(mqtt.Client):
             }
 
             self.publish(discovery_topic, json.dumps(payload), qos=2, retain=True)
-            logger.info("Published battery voltage discovery: %s", discovery_topic)
+            #logger.info("Published battery voltage discovery: %s", discovery_topic)
             time.sleep(0.05)
 
 
@@ -2459,13 +2497,13 @@ class Comfort2(mqtt.Client):
             except Exception:
                 value = "-1"
 
-            logger.info(
-                "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
-                topic,
-                label,
-                value,
-                raw_value
-            )
+            # logger.info(
+            #     "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
+            #     topic,
+            #     label,
+            #     value,
+            #     raw_value
+            # )
 
             if value != "-1":
                 self.publish(topic, value, qos=2, retain=True)
@@ -2481,11 +2519,11 @@ class Comfort2(mqtt.Client):
             dc_topic = f"{settings.DOMAIN}/alarm/dc_supply_slave{sem}_voltage"
 
             self.publish(battery_topic, "", qos=2, retain=True)
-            logger.info("Cleared retained battery state topic: %s", battery_topic)
+            #logger.info("Cleared retained battery state topic: %s", battery_topic)
             time.sleep(0.02)
 
             self.publish(dc_topic, "", qos=2, retain=True)
-            logger.info("Cleared retained DC supply state topic: %s", dc_topic)
+            #logger.info("Cleared retained DC supply state topic: %s", dc_topic)
             time.sleep(0.02)
 
         # --------------------------------------------------
@@ -2536,17 +2574,17 @@ class Comfort2(mqtt.Client):
                 except Exception:
                     value = "-1"
 
-                logging.info(
-                    "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
-                    topic,
-                    label,
-                    value,
-                    raw_value
-                )
+                # logging.info(
+                #     "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
+                #     topic,
+                #     label,
+                #     value,
+                #     raw_value
+                # )
 
                 if value != "-1":
                     self.publish(topic, value, qos=2, retain=True)
-                    logging.info("Published %s: %s -> %s", label, topic, value)
+                    # logging.info("Published %s: %s -> %s", label, topic, value)
                 else:
                     logging.warning("Skipping %s publish because raw value = %r", label, raw_value)
 
