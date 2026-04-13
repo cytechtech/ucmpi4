@@ -489,7 +489,6 @@ class Comfort2(mqtt.Client):
 
 
         if msg.topic == settings.ALARMCOMMANDTOPIC:    
-            logger.debug("In ALARMCOMMANDTOPIC topic is %s",msg.topic )
             if hasattr(self, "alarm_log"):
                 self.alarm_log.add(f"{msgstr}", level="CMD")
                 if msgstr in ("ARM_AWAY", "ARM_HOME", "ARM_NIGHT", "ARM_VACATION", "REM_ARM_AWAY"):
@@ -870,7 +869,7 @@ class Comfort2(mqtt.Client):
         if also_log and hasattr(self, "alarm_log"):
             self.alarm_log.add(text, level="MSG")
 
- 
+
     def readlines(self, delim=b'\r'):
         """
         Read CR-terminated lines from the Comfort serial port.
@@ -1108,7 +1107,7 @@ class Comfort2(mqtt.Client):
                              "DCSupplySlave7": str(settings.device_properties['ChargeVoltageSlave7']),
                              "InstalledSlaves": int(settings.device_properties['sem_id'])
                             })
-        logging.debug("Battery status publish: %s", MQTT_MSG)
+        #logging.debug("Battery status publish: %s", MQTT_MSG)
         self.publish(discoverytopic, MQTT_MSG,qos=2,retain=False)
         time.sleep(0.1)
 
@@ -1853,7 +1852,7 @@ class Comfort2(mqtt.Client):
         This helps HA forget old entity IDs when discovery naming has changed.
         """
         max_inputs = int(getattr(settings, "MAX_ZONES", 96) or 96)
-        logger.warning("DISCOVERY CLEAR inputs: domain=%s max_inputs=%d", settings.DOMAIN, max_inputs)
+        logger.info("DISCOVERY CLEAR inputs: domain=%s max_inputs=%d", settings.DOMAIN, max_inputs)
 
         for i in range(1, max_inputs + 1):
             topics = [
@@ -1865,7 +1864,7 @@ class Comfort2(mqtt.Client):
             ]
 
             for topic in topics:
-                logger.info("Clearing input discovery topic: %s", topic)
+               # logger.info("Clearing input discovery topic: %s", topic)
                 self.publish(topic, "", qos=1, retain=True)
                 time.sleep(0.005)
 
@@ -1876,7 +1875,7 @@ class Comfort2(mqtt.Client):
         This removes stale HA entities from previous discovery naming schemes.
         """
         max_outputs = int(getattr(settings, "MAX_OUTPUTS", 96) or 96)
-        logger.warning("DISCOVERY CLEAR outputs: domain=%s max_outputs=%d", settings.DOMAIN, max_outputs)
+        logger.info("DISCOVERY CLEAR outputs: domain=%s max_outputs=%d", settings.DOMAIN, max_outputs)
 
         for i in range(1, max_outputs + 1):
             topics = [
@@ -1895,7 +1894,7 @@ class Comfort2(mqtt.Client):
             ]
 
             for topic in topics:
-                logger.info("Clearing output discovery topic: %s", topic)
+                #logger.info("Clearing output discovery topic: %s", topic)
                 self.publish(topic, "", qos=1, retain=True)
                 time.sleep(0.005)
 
@@ -2002,19 +2001,19 @@ class Comfort2(mqtt.Client):
             return
 
         for i in range(1, max_outputs + 1):
-            logger.warning("OUTPUT DISCOVERY START %03d/%03d", i, max_outputs)
+
 
             props_str = settings.output_properties.get(str(i))
             props_int = settings.output_properties.get(i)
             props = settings.output_properties.get(str(i), settings.output_properties.get(i, {}))
 
-            logger.debug(
-                "OUTPUT %03d props_str=%r (%s) props_int=%r (%s) chosen=%r (%s)",
-                i,
-                props_str, type(props_str),
-                props_int, type(props_int),
-                props, type(props)
-            )
+            # logger.debug(
+            #     "OUTPUT %03d props_str=%r (%s) props_int=%r (%s) chosen=%r (%s)",
+            #     i,
+            #     props_str, type(props_str),
+            #     props_int, type(props_int),
+            #     props, type(props)
+            # )
 
             if isinstance(props, dict):
                 name = (props.get("Name") or props.get("name") or f"Output{i:03d}").strip()
@@ -2377,10 +2376,10 @@ class Comfort2(mqtt.Client):
 
         installed_slaves = max(0, min(installed_slaves, 7))
 
-        logger.info(
-            "Publishing battery voltage discovery for main board and %d installed SEM boards",
-            installed_slaves
-        )
+        # logger.info(
+        #     "Publishing battery voltage discovery for main board and %d installed SEM boards",
+        #     installed_slaves
+        # )
 
         # Clear retained discovery for SEM boards above the installed count
         for sem in range(installed_slaves + 1, 8):
@@ -2456,10 +2455,10 @@ class Comfort2(mqtt.Client):
         # Clamp to valid SEM range
         installed_slaves = max(0, min(installed_slaves, 7))
 
-        logger.info(
-            "Publishing battery voltage states for main board and %d installed SEM boards",
-            installed_slaves
-        )
+        # logger.info(
+        #     "Publishing battery voltage states for main board and %d installed SEM boards",
+        #     installed_slaves
+        # )
 
         def publish_voltage(topic, raw_value, label):
             try:
@@ -3246,7 +3245,7 @@ class Comfort2(mqtt.Client):
         try:
             payload = json.dumps(payload_obj, ensure_ascii=False)
             self.publish(f"{settings.DOMAIN}/meta/{name}", payload, qos=qos, retain=True)
-            logger.info("Published meta '%s' (%d bytes)", name, len(payload.encode("utf-8")))
+            #logger.info("Published meta '%s' (%d bytes)", name, len(payload.encode("utf-8")))
         except Exception as e:
             logger.exception("Failed to publish meta '%s': %s", name, e)
 
