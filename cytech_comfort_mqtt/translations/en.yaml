@@ -1,6 +1,6 @@
 ---
 configuration:
-  comfort_baudrate:
+  comfort_serial_mode:
     name: Comfort baud rate
     description: >
       Select the serial baud rate for the Comfort connection.
