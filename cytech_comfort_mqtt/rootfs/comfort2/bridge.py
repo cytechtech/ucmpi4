@@ -116,7 +116,11 @@ _opts = load_options()
 # ----------------------------
 
 # MQTT
-settings.COMFORT_BAUDRATE = get_int(_opts, "comfort_baudrate", 115200)
+#settings.COMFORT_BAUDRATE = int(get_str(_opts, "comfort_baudrate", "115200"))
+
+raw_baud = get_str(_opts, "comfort_baudrate", "115200")
+settings.COMFORT_BAUDRATE = int(raw_baud)
+logger.info("Configured baudrate: raw='%s' → int=%d", raw_baud, settings.COMFORT_BAUDRATE)
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
 settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
@@ -323,7 +327,10 @@ class Comfort2(mqtt.Client):
         self.mqtt_port = mqtt_port
         self.comfort_pincode = comfort_pincode
         self.connected = False
-        self.username_pw_set(mqtt_username, mqtt_password)
+        if mqtt_username:
+            self.username_pw_set(mqtt_username, mqtt_password)
+        else:
+            logger.info("MQTT: No username configured, connecting without authentication")
         self.version = mqtt_version
 
         self._last_reload_ts = 0.0
@@ -2626,10 +2633,10 @@ class Comfort2(mqtt.Client):
 
                 try:
                     
-                    logger.info("Opening Comfort serial port /dev/serial0 @ %d", settings.BAUDRATE)
+                    logger.info("Opening Comfort serial port /dev/serial0 @ %d", settings.COMFORT_BAUDRATE)
                     self.serial = LoggedSerial(
                         port='/dev/serial0',
-                        baudrate=settings.BAUDRATE,
+                        baudrate=settings.COMFORT_BAUDRATE,
                         timeout=0.2
                     )
 

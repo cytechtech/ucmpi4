@@ -50,7 +50,7 @@ MAX_TIMERS = 64                  # Configurable for future expansion. Max 64.
 BUFFER_SIZE = 4096
 COMFORT_BATTERY_STATUS_ID = 1
 COMFORT_CCLX_FILE = None    # Path to active CCLX file (set at runtime)
-BAUDRATE = 115200             # 115200 (UCMA/Pi) (default) or 9600 (CM4Pi on CM9001)
+COMFORT_BAUDRATE = 115200             # 115200 (UCMA/Pi) (default) or 9600 (CM4Pi on CM9001)
 # ============================================================
 # MQTT SETTINGS
 # ============================================================
