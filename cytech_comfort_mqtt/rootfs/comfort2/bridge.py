@@ -116,11 +116,19 @@ _opts = load_options()
 # ----------------------------
 
 # MQTT
-#settings.COMFORT_BAUDRATE = int(get_str(_opts, "comfort_baudrate", "115200"))
+serial_mode = get_str(_opts, "comfort_serial_mode", "UCMA/Pi")
 
-raw_baud = get_str(_opts, "comfort_baudrate", "115200")
-settings.COMFORT_BAUDRATE = int(raw_baud)
-logger.info("Configured baudrate: raw='%s' → int=%d", raw_baud, settings.COMFORT_BAUDRATE)
+if serial_mode == "CM4Pi on CM9001":
+    settings.COMFORT_BAUDRATE = 9600
+else:
+    settings.COMFORT_BAUDRATE = 115200
+
+logger.info(
+    "Configured serial mode: %s -> baudrate %d",
+    serial_mode,
+    settings.COMFORT_BAUDRATE
+)
+
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
 settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
