@@ -1,9 +1,7 @@
 ## [1.0.2] - 2026-04-21
 
 ### Added
-- Added Confige option for UCMA/Pi CM4Pi on CM9001 - this sets the baudrate
-- Added handling for DT (date/time) messages from Comfort
-- Added logging for AL message type (alarm event reporting)
+- Added Config option for UCMA/Pi CM4Pi on CM9001 - this sets the baudrate
 
 
 ## [1.0.1] - 2026-04-13

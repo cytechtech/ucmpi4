@@ -123,12 +123,6 @@ if serial_mode == "CM4Pi on CM9001":
 else:
     settings.COMFORT_BAUDRATE = 115200
 
-logger.info(
-    "Configured serial mode: %s -> baudrate %d",
-    serial_mode,
-    settings.COMFORT_BAUDRATE
-)
-
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
 settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
@@ -208,6 +202,11 @@ logging.basicConfig(
 )
 
 logger.info("Completed importing addon configuration options")
+logger.info(
+    "Configured serial mode: %s -> baudrate %d",
+    serial_mode,
+    settings.COMFORT_BAUDRATE
+)
 logger.debug("MQTT_USER = %s", settings.MQTTUSERNAME)
 logger.debug("MQTT_PASSWORD = ******")
 logger.debug("MQTT_SERVER = %s", settings.MQTTBROKERIP)
