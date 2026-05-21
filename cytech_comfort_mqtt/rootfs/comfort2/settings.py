@@ -4,6 +4,7 @@
 #
 # Original project code by Khor Chin Heong.
 # Modifications in 2025 by Ingo de Jager.
+
 # Further modifications and enhancements in 2026 by Cytech Technology Pte Ltd.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +23,8 @@
 import secrets
 import logging
 from datetime import timedelta
+
+from cytech_comfort_mqtt.rootfs.comfort2.bridge import MQTT_DEVICE_COMFORT
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +49,8 @@ MAX_FLAGS = 254                   # Configurable for future expansion. Max 254.
 MAX_COUNTERS = 255                # Configurable for future expansion. Max 255.
 MAX_SENSORS = 32                 # Configurable for future expansion. Max 32.
 MAX_TIMERS = 64                  # Configurable for future expansion. Max 64.
+
+MQTT_DEVICE_COMFORT = None    # MQTT Device info for Comfort. Set at runtime by bridge.py 
 
 BUFFER_SIZE = 4096
 COMFORT_BATTERY_STATUS_ID = 1

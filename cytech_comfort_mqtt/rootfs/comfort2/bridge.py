@@ -199,7 +199,6 @@ logger.debug("CPUType = %s", settings.device_properties.get("CPUType"))
 
 
 ACTIVE_CLIENT = None
-MQTT_DEVICE_COMFORT = None  # Comfort device dict used for MQTT discovery republish on reload
 
 class LoggedSerial(serial.Serial):
     """Serial wrapper with concise TX/RX logging."""
@@ -1106,7 +1105,7 @@ class Comfort2(mqtt.Client):
 
         #option = parser.parse_args()
         #COMFORT_BATTERY_STATUS_ID=option.comfort_battery_update
-        global MQTT_DEVICE_COMFORT
+        settings.MQTT_DEVICE_COMFORT
         
         file_exists = _file
   
@@ -1228,38 +1227,38 @@ class Comfort2(mqtt.Client):
      
      
         # Store the Comfort device dict for reload/discovery republish
-        MQTT_DEVICE_COMFORT = MQTT_DEVICE
+        settings.MQTT_DEVICE_COMFORT = MQTT_DEVICE
 
-        self.MQTT_DEVICE_COMFORT = MQTT_DEVICE
+        settings.MQTT_DEVICE_COMFORT = MQTT_DEVICE
         
         # Publish Input discovery entities under the Comfort device  # Cytech26
         if not getattr(self, "_inputs_discovery_published", False):
-            self.publish_input_discovery(MQTT_DEVICE_COMFORT)
+            self.publish_input_discovery(settings.MQTT_DEVICE_COMFORT)
             self._inputs_discovery_published = True
 
         # Publish Output discovery entities under the Comfort device
         if not getattr(self, "_outputs_discovery_published", False):
-            self.publish_output_discovery(MQTT_DEVICE_COMFORT)
+            self.publish_output_discovery(settings.MQTT_DEVICE_COMFORT)
             self._outputs_discovery_published = True
 
         # Publish Flag discovery entities under the Comfort device
         if not getattr(self, "_flags_discovery_published", False):
-            self.publish_flag_discovery(MQTT_DEVICE_COMFORT)
+            self.publish_flag_discovery(settings.MQTT_DEVICE_COMFORT)
             self._flags_discovery_published = True
 
         # Publish Counter discovery entities under the Comfort device
         if not getattr(self, "_counters_discovery_published", False):
-            self.publish_counter_discovery(MQTT_DEVICE_COMFORT)
+            self.publish_counter_discovery(settings.MQTT_DEVICE_COMFORT)
             self._counters_discovery_published = True
 
         # Publish Sensor discovery entities under the Comfort device
         if not getattr(self, "_sensors_discovery_published", False):
-            self.publish_sensor_discovery(MQTT_DEVICE_COMFORT)
+            self.publish_sensor_discovery(settings.MQTT_DEVICE_COMFORT)
             self._sensors_discovery_published = True
 
          # Publish Timer discovery entities under the Comfort device
         if not getattr(self, "_timers_discovery_published", False):
-            self.publish_timer_discovery(MQTT_DEVICE_COMFORT)
+            self.publish_timer_discovery(settings.MQTT_DEVICE_COMFORT)
             self._timers_discovery_published = True
 
         self.PublishBatteryVoltageDiscovery()
@@ -2008,7 +2007,7 @@ class Comfort2(mqtt.Client):
 
     def _device_block(self) -> dict:
         # Use your existing MQTT_DEVICE if you already have it
-        return MQTT_DEVICE_COMFORT
+        return settings.MQTT_DEVICE_COMFORT
 
 
     ####  MQTT Discovery for Inputs, Outputs, Flags, Counters, Timers and Users ####
@@ -2379,7 +2378,7 @@ class Comfort2(mqtt.Client):
         """Publish MQTT discovery for main battery/DC voltage sensors and installed SEM boards only.
         Also clears retained discovery topics for SEM boards that are no longer installed.
         """
-        device_block = self.MQTT_DEVICE_COMFORT
+        device_block = settings.MQTT_DEVICE_COMFORT
 
         availability = [
             {
