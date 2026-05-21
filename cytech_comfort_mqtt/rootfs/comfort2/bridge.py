@@ -39,7 +39,7 @@ from queue import Queue, Empty
 # Configure logging before importing project modules
 from logging_config import setup_ram_logging
 setup_ram_logging(logging.INFO) # set to user configured level after options are loaded
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bridge")
 
 # Third-party imports
 import defusedxml.ElementTree as ET

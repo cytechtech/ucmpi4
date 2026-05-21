@@ -64,7 +64,7 @@ setup_ram_logging(
     level=getattr(logging, log_verbosity, logging.INFO)
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("webapp")
 logging.getLogger("werkzeug").disabled = True
 
 logger.info("Web UI RAM logging initialised at %s", log_verbosity)
@@ -95,6 +95,7 @@ RELOAD_FLAG = DATA_DIR / "reload.flag"
 UPLOAD_META = DATA_DIR / "upload.meta.json"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+RAM_LOG_FILE = Path("/dev/shm/cytech_comfort_mqtt.log")
 
 app = Flask(__name__)
 
@@ -452,6 +453,18 @@ def home():
     <button class="btn" type="submit">Rollback to previous active</button>
   </form>
 </div>
+
+<div class="card">
+  <div><strong>Logs</strong></div>
+  <div>View, download, or clear the RAM-based add-on log.</div>
+  <div class="row" style="margin-top:10px;">
+    <a class="btn" href="{url_for('view_log')}">View log</a>
+    <a class="btn" href="{url_for('download_log')}">Download log</a>
+    <form method="post" action="{url_for('clear_log')}" style="display:inline;">
+      <button class="btn" type="submit">Clear log</button>
+    </form>
+  </div>
+</div>
 """
     return _html("Comfort CCLX File Download", body)
 
@@ -517,52 +530,6 @@ def upload():
                 f"<p><a href='{url_for('home')}'>Back</a></p>"
             ),
         ), 500
-
-@app.get("/preview")
-def preview():
-    if not UPLOAD_CCLX.exists():
-        return _html(
-            "Preview",
-            f"<p class='err'>No uploaded CCLX staged. Upload first.</p><p><a href='{url_for('home')}'>Back</a></p>"
-        ), 404
-
-    info = _file_info(UPLOAD_CCLX)
-    meta = _read_upload_meta()
-
-    # Small preview for UI (avoid huge pages)
-    text = _file_preview_text(UPLOAD_CCLX, max_bytes=8192)
-    safe_text = html.escape(text)
-
-    # Metadata rows (only show if present)
-    meta_rows = ""
-    if meta:
-        meta_rows = f"""
-        <div>Original filename: <code>{html.escape(str(meta.get("original_filename", "-")))}</code></div>
-        <div>Uploaded at: <code>{html.escape(str(meta.get("uploaded_at", "-")))}</code></div>
-        <div>Content type: <code>{html.escape(str(meta.get("content_type", "-")))}</code></div>
-        """
-
-    body = f"""
-<div class="card">
-  <div><strong>Uploaded file details</strong></div>
-  {meta_rows}
-  <div>Stored path: <code>{UPLOAD_CCLX}</code></div>
-  <div>Size: <code>{info.get("size","-")}</code> bytes</div>
-  <div>Modified: <code>{info.get("mtime","-")}</code></div>
-  <div>SHA256: <code>{info.get("sha256") or "-"}</code></div>
-  <div class="row" style="margin-top:10px;">
-    <a class="btn" href="./download">Download</a>
-    <a class="btn" href="{url_for('home')}">Back</a>
-  </div>
-</div>
-
-<div class="card">
-  <div><strong>Preview</strong></div>
-  <div class="warn">Showing first 8 KB</div>
-  <pre>{safe_text}</pre>
-</div>
-"""
-    return _html("CCLX Preview", body)
 
 
 @app.get("/download")
@@ -663,7 +630,54 @@ def rollback():
 
     return _html("Rollback", f"<p class='ok'>Rollback complete at {_now()}.</p><p><a href='{url_for('home')}'>Back</a></p>")
 
-  
+
+@app.get("/log")
+def view_log():
+    if not RAM_LOG_FILE.exists():
+        return _html("Comfort Log", f"<p class='warn'>No RAM log file exists yet.</p><p><a href='{url_for('home')}'>Back</a></p>"), 404
+
+    text = RAM_LOG_FILE.read_text(encoding="utf-8", errors="replace")
+    safe_text = html.escape(text[-200000:])
+
+    body = f"""
+<div class="card">
+  <div><strong>RAM log file</strong></div>
+  <div>Path: <code>{RAM_LOG_FILE}</code></div>
+  <div>Showing last <code>200 KB</code>.</div>
+  <div class="row" style="margin-top:10px;">
+    <a class="btn" href="{url_for('download_log')}">Download full log</a>
+    <form method="post" action="{url_for('clear_log')}" style="display:inline;">
+      <button class="btn" type="submit">Clear log</button>
+    </form>
+    <a class="btn" href="{url_for('home')}">Back</a>
+  </div>
+</div>
+<div class="card">
+  <pre>{safe_text}</pre>
+</div>
+"""
+    return _html("Comfort Log", body)
+
+
+@app.get("/log/download")
+def download_log():
+    if not RAM_LOG_FILE.exists():
+        return _html("Download Log", f"<p class='warn'>No RAM log file exists yet.</p><p><a href='{url_for('home')}'>Back</a></p>"), 404
+
+    return send_file(
+        str(RAM_LOG_FILE),
+        as_attachment=True,
+        download_name="cytech_comfort_mqtt.log",
+        mimetype="text/plain",
+        conditional=True,
+    )
+
+
+@app.post("/log/clear")
+def clear_log():
+    RAM_LOG_FILE.write_text("", encoding="utf-8")
+    logger.warning("RAM log cleared from Web UI")
+    return redirect(url_for("view_log"))  
 
 if __name__ == "__main__":
     # Ingress requires binding to 0.0.0.0
