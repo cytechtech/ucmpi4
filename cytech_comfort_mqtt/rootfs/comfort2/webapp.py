@@ -65,7 +65,7 @@ setup_ram_logging(
 )
 
 logger = logging.getLogger("webapp")
-logging.getLogger("werkzeug").disabled = True
+#logging.getLogger("werkzeug").disabled = True
 
 logger.info("Web UI RAM logging initialised at %s", log_verbosity)
 
@@ -418,7 +418,7 @@ def home():
   <div>Upload size: <code>{upload_info.get("size","-")}</code> bytes</div>
   <div>Upload modified: <code>{upload_info.get("mtime","-")}</code></div>
   <div>Upload SHA256: <code>{upload_info.get("sha256") or "-"}</code></div>
-  {f"<div class='row'><a class='btn' href='{url_for('preview')}'>Preview</a><a class='btn' href='{url_for('download')}'>Download</a></div>" if upload_info.get("exists") else ""}
+  {f"<div class='row'><a class='btn' href='{url_for('download')}'>Download uploaded CCLX</a></div>" if upload_info.get("exists") else ""}
   <div>Backup: {"<span class='ok'>present</span>" if BACKUP_CCLX.exists() else "<span class='warn'>none</span>"}</div>
   <div>Backup SHA256: <code>{backup_sha or "-"}</code></div>
 </div>
