@@ -25,7 +25,6 @@ from logging.handlers import RotatingFileHandler
 RAM_LOG_FILE = "/dev/shm/cytech_comfort_mqtt.log"
 
 def setup_ram_logging(level=logging.INFO):
-    print("SETUP_RAM_LOGGING CALLED")
     root = logging.getLogger()
 
     # already configured?
@@ -52,5 +51,3 @@ def setup_ram_logging(level=logging.INFO):
     file_handler.setFormatter(formatter)
 
     root.addHandler(file_handler)
-    root.warning("TEST RAM LOG WRITE")
-    print("RAM LOG FILE:", RAM_LOG_FILE)

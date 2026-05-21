@@ -1805,8 +1805,6 @@ class Comfort2(mqtt.Client):
             self.clear_timer_discovery()
             self.clear_battery_voltage_discovery()
 
-
-
             data_cclx = Path("/data/site.cclx")
             logger.warning("Reload using CCLX path=%s exists=%s", data_cclx, data_cclx.exists())
 
@@ -1828,12 +1826,31 @@ class Comfort2(mqtt.Client):
                 self.PublishBatteryVoltageDiscovery()
                 self.PublishBatteryVoltageStates()
             else:
-                logger.warning("MQTT_DEVICE_COMFORT not set yet; skipping discovery publish on reload")
+              self.ensure_mqtt_device_comfort()
 
         except Exception:
             logger.exception("Reload failed source=%s reason=%r", source, reason)
             raise
 
+
+    def ensure_mqtt_device_comfort(self):
+        """
+        Ensure MQTT discovery has a valid device block even if Comfort
+        has not yet reported hardware/model information.
+        """
+        if getattr(settings, "MQTT_DEVICE_COMFORT", None):
+            return
+
+        settings.MQTT_DEVICE_COMFORT = {
+            "identifiers": [settings.DOMAIN],
+            "name": "Comfort",
+            "manufacturer": "Cytech",
+            "model": "Comfort",
+        }
+
+        logger.warning(
+            "MQTT_DEVICE_COMFORT missing; using fallback device metadata"
+        )
 
     def clear_input_discovery(self):
         """

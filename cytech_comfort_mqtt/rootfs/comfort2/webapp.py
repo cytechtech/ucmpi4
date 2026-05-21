@@ -65,7 +65,7 @@ setup_ram_logging(
 )
 
 logger = logging.getLogger("webapp")
-#logging.getLogger("werkzeug").disabled = True
+logging.getLogger("werkzeug").disabled = True
 
 logger.info("Web UI RAM logging initialised at %s", log_verbosity)
 
@@ -102,20 +102,6 @@ app = Flask(__name__)
 
 DOMAIN = settings.DOMAIN
 RELOAD_TOPIC = f"{DOMAIN}/reload"
-
-
-# def mqtt_publish_reload(reason: str | None = None) -> None:
-#     logger.warning("Publishing MQTT reload signal to topic '%s' (reason=%s)", RELOAD_TOPIC, reason)
-#     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-#     if MQTT_USER:
-#         c.username_pw_set(MQTT_USER, MQTT_PASS or "")
-
-#     c.connect(MQTT_HOST, MQTT_PORT, keepalive=10)
-
-#     payload = {"key": COMFORT_KEY, "reason": reason or "webui"}
-#     c.publish(RELOAD_TOPIC, json.dumps(payload), qos=1, retain=False)
-
-#     c.disconnect()
 
 
 def mqtt_publish_reload(reason: str | None = None) -> None:
@@ -402,6 +388,15 @@ def home():
 """
 
     body = f"""{banner_html}
+
+<div class="card">
+  <div><strong>Cytech Comfort Add-on</strong></div>
+  <div class="row" style="margin-top:10px;">
+    <a class="btn btn-primary" href="{url_for('home')}">CCLX File</a>
+    <a class="btn" href="{url_for('view_log')}">Logs</a>
+  </div>
+</div>
+
 <div class="card">
   <div><strong>Status</strong></div>
   <div>Time: <span class="pill">{_now()}</span></div>
@@ -453,21 +448,8 @@ def home():
     <button class="btn" type="submit">Rollback to previous active</button>
   </form>
 </div>
-
-<div class="card">
-  <div><strong>Logs</strong></div>
-  <div>View, download, or clear the RAM-based add-on log.</div>
-  <div class="row" style="margin-top:10px;">
-    <a class="btn" href="{url_for('view_log')}">View log</a>
-    <a class="btn" href="{url_for('download_log')}">Download log</a>
-    <form method="post" action="{url_for('clear_log')}" style="display:inline;">
-      <button class="btn" type="submit">Clear log</button>
-    </form>
-  </div>
-</div>
 """
-    return _html("Comfort CCLX File Download", body)
-
+    return _html("Cytech Comfort Add-on", body)
 
 @app.post("/upload")
 def upload():
@@ -634,29 +616,44 @@ def rollback():
 @app.get("/log")
 def view_log():
     if not RAM_LOG_FILE.exists():
-        return _html("Comfort Log", f"<p class='warn'>No RAM log file exists yet.</p><p><a href='{url_for('home')}'>Back</a></p>"), 404
+        return _html(
+            "Cytech Comfort Logs",
+            f"<p class='warn'>No RAM log file exists yet.</p>"
+            f"<p><a href='{url_for('home')}'>Back</a></p>"
+        ), 404
 
     text = RAM_LOG_FILE.read_text(encoding="utf-8", errors="replace")
     safe_text = html.escape(text[-200000:])
 
     body = f"""
 <div class="card">
+  <div><strong>Cytech Comfort Add-on</strong></div>
+  <div class="row" style="margin-top:10px;">
+    <a class="btn" href="{url_for('home')}">CCLX File</a>
+    <a class="btn btn-primary" href="{url_for('view_log')}">Logs</a>
+  </div>
+</div>
+
+<div class="card">
   <div><strong>RAM log file</strong></div>
   <div>Path: <code>{RAM_LOG_FILE}</code></div>
   <div>Showing last <code>200 KB</code>.</div>
+
   <div class="row" style="margin-top:10px;">
+    <a class="btn btn-primary" href="{url_for('view_log')}">Refresh</a>
     <a class="btn" href="{url_for('download_log')}">Download full log</a>
+
     <form method="post" action="{url_for('clear_log')}" style="display:inline;">
       <button class="btn" type="submit">Clear log</button>
     </form>
-    <a class="btn" href="{url_for('home')}">Back</a>
   </div>
 </div>
+
 <div class="card">
   <pre>{safe_text}</pre>
 </div>
 """
-    return _html("Comfort Log", body)
+    return _html("Cytech Comfort Logs", body)
 
 
 @app.get("/log/download")
