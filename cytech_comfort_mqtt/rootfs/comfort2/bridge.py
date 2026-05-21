@@ -19,65 +19,42 @@
 # limitations under the License.
 #
 
-import defusedxml.ElementTree as ET
-import os
-import requests
+# Standard library imports
+import datetime
+import ipaddress
 import json
-from pathlib import Path
+import logging
+import os
 import re
 import signal
-import ipaddress
 import socket
-import serial
-import time
-import datetime
 import threading
-import logging
-from datetime import datetime, timedelta
-import secrets
-import paho.mqtt.client as mqtt
+import time
 from argparse import ArgumentParser
-from comfort_protocol import (
-    ComfortLUUserLoggedIn,
-    ComfortIPInputActivationReport,
-    ComfortCTCounterActivationReport,
-    ComfortTRReport,
-    ComfortOPOutputActivationReport,
-    ComfortFLFlagActivationReport,
-    ComfortBYBypassActivationReport,
-    ComfortZ_ReportAllZones,
-    Comfort_RSensorActivationReport,
-    Comfort_R_ReportAllSensors,
-    ComfortY_ReportAllOutputs,
-    Comfort_Y_ReportAllOutputs,
-    ComfortB_ReportAllBypassZones,
-    Comfortf_ReportAllFlags,
-    ComfortM_SecurityModeReport,
-    ComfortS_SecurityModeReport,
-    ComfortERArmReadyNotReady,
-    ComfortAMSystemAlarmReport,
-    ComfortALSystemAlarmReport,
-    Comfort_A_SecurityInformationReport,
-    ComfortARSystemAlarmReport,
-    ComfortV_SystemTypeReport,
-    Comfort_U_SystemCPUTypeReport,
-    Comfort_EL_HardwareModelReport,
-    Comfort_D_SystemVoltageReport,
-    ComfortSN_SerialNumberReport,
-    ComfortEXEntryExitDelayStarted,
-)
+from collections import deque
+from datetime import datetime, timedelta
+from pathlib import Path
+from queue import Queue, Empty
+
+# Configure logging before importing project modules
+from logging_config import setup_ram_logging
+setup_ram_logging(logging.INFO) # set to user configured level after options are loaded
+logger = logging.getLogger(__name__)
+
+# Third-party imports
+import defusedxml.ElementTree as ET
+import paho.mqtt.client as mqtt
+import requests
+import serial
+
+# Project imports
+import settings
 
 from cclx_parser import parse_cclx
-import settings
-from collections import deque
-import json
-from pathlib import Path
-
-import inspect
-
 from options import load_options, get_str, get_int, get_bool
+import comfort_protocol
 
-from queue import Queue, Empty
+
 
 def is_ipv4_address(address):
     try:
@@ -106,9 +83,6 @@ def get_ip_address(input_value):
     else:
         return resolve_to_ip(input_value)
 
-
-
-logger = logging.getLogger(__name__)
 _opts = load_options()
 
 # ----------------------------
@@ -190,16 +164,20 @@ if settings.UI_SENSOR_COUNT < 0:
 if settings.UI_SENSOR_COUNT > settings.MAX_SENSORS:
     settings.UI_SENSOR_COUNT = settings.MAX_SENSORS
 
+
 # Logging
 settings.LOG_VERBOSITY = get_str(_opts, "log_verbosity", "INFO").upper()
+
 if settings.LOG_VERBOSITY not in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]:
     settings.LOG_VERBOSITY = "INFO"
 
-logging.basicConfig(
-    format='%(asctime)s %(levelname)-8s %(message)s',
-    level=getattr(logging, settings.LOG_VERBOSITY, logging.INFO),
-    datefmt='%Y-%m-%d %H:%M:%S'
+setup_ram_logging(
+    level=getattr(logging, settings.LOG_VERBOSITY, logging.INFO)
 )
+
+logger = logging.getLogger(__name__)
+
+logger.info("RAM logging initialised at %s", settings.LOG_VERBOSITY)
 
 logger.info("Completed importing addon configuration options")
 logger.info(
@@ -2759,7 +2737,7 @@ class Comfort2(mqtt.Client):
     def handle_serial_line(self, line):
         # --- LOGIN ---
         if line[1:3] == "LU":
-            luMsg = ComfortLUUserLoggedIn(line[1:])
+            luMsg = comfort_protocol.ComfortLUUserLoggedIn(line[1:])
             if luMsg.user != 0:
                 logger.info('Comfort Login Ok - User %s', (luMsg.user if luMsg.user != 254 else 'Engineer'))
 
@@ -2793,10 +2771,6 @@ class Comfort2(mqtt.Client):
                     self.publish(settings.ALARMAVAILABLETOPIC, 0, qos=2, retain=True)
                     self.publish(settings.ALARMLWTTOPIC, 'Offline', qos=2, retain=True)
                     self.publish(settings.ALARMCONNECTEDTOPIC, "0", qos=2, retain=False)
-
-        # --- TIME SYNC ---
-        elif line[1:5] == "PS00":
-            self.setdatetime()
 
         # --- TIME SYNC ---
         elif line[1:5] == "PS00":
@@ -2839,9 +2813,10 @@ class Comfort2(mqtt.Client):
             if not settings.CacheState:
                 logger.debug("Ignoring IP (CacheState=False): %s", line)
                 return
-            ipMsg = ComfortIPInputActivationReport(line[1:])
+            ipMsg = comfort_protocol.ComfortIPInputActivationReport(line[1:])
 
             if ipMsg.state < 2:
+
                 try:
                     _name = settings.input_properties[str(ipMsg.input)]['Name'] if settings.ZONEMAPFILE else f"Zone{ipMsg.input:02d}"
                 except KeyError:
@@ -2879,7 +2854,7 @@ class Comfort2(mqtt.Client):
             if not settings.CacheState:
                 logger.debug("Ignoring CT (CacheState=False): %s", line)
                 return
-            ipMsgCT = ComfortCTCounterActivationReport(line[1:])
+            ipMsgCT = comfort_protocol.ComfortCTCounterActivationReport(line[1:])
 
             self.publish(
                 settings.ALARMCOUNTERTOPIC % ipMsgCT.counter,
@@ -2891,7 +2866,7 @@ class Comfort2(mqtt.Client):
 
         # --- SENSOR REQUEST RESPONSE ---
         elif line[1:3] == "s?":
-            ipMsgSQ = Comfort_RSensorActivationReport(line[1:])
+            ipMsgSQ = comfort_protocol.Comfort_RSensorActivationReport(line[1:])
             sensor_id = ipMsgSQ.sensor
             value = int(ipMsgSQ.value)
             topic = settings.ALARMSENSORTOPIC % sensor_id
@@ -2907,7 +2882,7 @@ class Comfort2(mqtt.Client):
                     line
                 )
                 return
-            ipMsgSR = Comfort_RSensorActivationReport(line[1:])
+            ipMsgSR = comfort_protocol.Comfort_RSensorActivationReport(line[1:])
             sensor_id = ipMsgSR.sensor
             value = int(ipMsgSR.value)
             topic = settings.ALARMSENSORTOPIC % sensor_id
@@ -2917,7 +2892,7 @@ class Comfort2(mqtt.Client):
 
         # --- TIMER ---
         elif line[1:3] == "TR":
-            ipMsgTR = ComfortTRReport(line[1:])
+            ipMsgTR = comfort_protocol.ComfortTRReport(line[1:])
             timer_id = ipMsgTR.timer
             value = ipMsgTR.value
             state = ipMsgTR.state
@@ -2937,14 +2912,14 @@ class Comfort2(mqtt.Client):
 
         # --- LOGIN REPORT ---
         elif line[1:3] == "LR":
-            luMsg = ComfortLUUserLoggedIn(line[1:])
+            luMsg = comfort_protocol.ComfortLUUserLoggedIn(line[1:])
             if luMsg.user != 0:
                 message_topic = f"Comfort {luMsg.method} Login - {f'User {luMsg.user}' if luMsg.user != 254 else 'Engineer'}"
                 self.publish_alarm_message(message_topic, retain=False)
 
         # --- BULK ZONES ---
         elif line[1:3] == "Z?":
-            zMsg = ComfortZ_ReportAllZones(line[1:])
+            zMsg = comfort_protocol.ComfortZ_ReportAllZones(line[1:])
 
             for ipMsgZ in zMsg.inputs:
                 settings.ZoneCache[ipMsgZ.input] = ipMsgZ.state
@@ -2960,7 +2935,7 @@ class Comfort2(mqtt.Client):
 
         # --- MODE ---
         elif line[1:3] == "M?" or line[1:3] == "MD":
-            mMsg = ComfortM_SecurityModeReport(line[1:])
+            mMsg = comfort_protocol.ComfortM_SecurityModeReport(line[1:])
             self.publish(settings.ALARMSTATETOPIC, mMsg.modename, qos=2, retain=True)
             self.publish(settings.ALARMMODETOPIC, mMsg.mode, qos=2, retain=True)
             self.entryexitdelay = 0
@@ -2969,14 +2944,14 @@ class Comfort2(mqtt.Client):
 
         # --- STATUS ---
         elif line[1:3] == "S?":
-            SMsg = ComfortS_SecurityModeReport(line[1:])
+            SMsg = comfort_protocol.ComfortS_SecurityModeReport(line[1:])
             self.publish(settings.ALARMSTATETOPIC, SMsg.modename, qos=2, retain=True)
             if hasattr(self, "alarm_log"):
                 self.alarm_log.add(f"STATUS -> {SMsg.modename}", level="STATE")
 
         # --- SYSTEM INFO / DISCOVERY ---
         elif line[1:3] == "V?":
-            VMsg = ComfortV_SystemTypeReport(line[1:])
+            VMsg = comfort_protocol.ComfortV_SystemTypeReport(line[1:])
 
             settings.device_properties['ComfortFileSystem'] = str(VMsg.filesystem)
             settings.device_properties['ComfortFirmwareType'] = str(VMsg.firmware)
@@ -3003,7 +2978,7 @@ class Comfort2(mqtt.Client):
                 )
 
         elif line[1:5] == "u?01":
-            uMsg = Comfort_U_SystemCPUTypeReport(line[1:])
+            uMsg = comfort_protocol.Comfort_U_SystemCPUTypeReport(line[1:])
 
             settings.device_properties['CPUType'] = str(uMsg.cputype)
             if str(uMsg.cputype) == "N/A":
@@ -3029,12 +3004,12 @@ class Comfort2(mqtt.Client):
             self.UpdateDeviceInfo(True)
 
         elif line[1:3] == "EL":
-            ELMsg = Comfort_EL_HardwareModelReport(line[1:])
+            ELMsg = comfort_protocol.Comfort_EL_HardwareModelReport(line[1:])
             settings.device_properties['ComfortHardwareModel'] = str(ELMsg.hardwaremodel)
             self.UpdateDeviceInfo(True)
 
         elif line[1:3] == "D?":
-            Comfort_D_SystemVoltageReport(line[1:])
+            comfort_protocol.Comfort_D_SystemVoltageReport(line[1:])
             logger.info(
                 "BatteryVoltageMain=%s ChargeVoltageMain=%s BatteryStatus=%s ChargerStatus=%s",
                 settings.device_properties.get("BatteryVoltageMain"),
@@ -3045,7 +3020,7 @@ class Comfort2(mqtt.Client):
             self.UpdateBatteryStatus()
 
         elif line[1:5] == "SN01":
-            SNMsg = ComfortSN_SerialNumberReport(line[1:])
+            SNMsg = comfort_protocol.ComfortSN_SerialNumberReport(line[1:])
             if settings.COMFORT_SERIAL != SNMsg.serial_number:
                 pass
             settings.COMFORT_KEY = SNMsg.refreshkey
@@ -3055,7 +3030,7 @@ class Comfort2(mqtt.Client):
             self.UpdateDeviceInfo(True)
 
         elif line[1:3] == "a?":
-            aMsg = Comfort_A_SecurityInformationReport(line[1:])
+            aMsg = comfort_protocol.Comfort_A_SecurityInformationReport(line[1:])
             self.publish(settings.ALARMSTATUSTOPIC, aMsg.state, qos=2, retain=True)
             if aMsg.type == 'LowBattery':
                 logging.warning("Low Battery - %s", aMsg.battery)
@@ -3070,7 +3045,7 @@ class Comfort2(mqtt.Client):
             if not settings.CacheState:
                 logger.debug("Ignoring ER (CacheState=False): %s", line)
                 return
-            erMsg = ComfortERArmReadyNotReady(line[1:])
+            erMsg = comfort_protocol.ComfortERArmReadyNotReady(line[1:])
             if erMsg.zone != 0:
                 zone = str(erMsg.zone)
 
@@ -3086,19 +3061,19 @@ class Comfort2(mqtt.Client):
 
         # --- ALARM ---
         elif line[1:3] == "AM":
-            amMsg = ComfortAMSystemAlarmReport(line[1:])
+            amMsg = comfort_protocol.ComfortAMSystemAlarmReport(line[1:])
             self.publish_alarm_message(amMsg.message, retain=True)
             if amMsg.triggered:
                 self.publish(settings.ALARMSTATETOPIC, "triggered", qos=2, retain=False)
                 self.publish_alarm_message("triggered", retain=False)
 
         elif line[1:3] == "AR":
-            arMsg = ComfortARSystemAlarmReport(line[1:])
+            arMsg = comfort_protocol.ComfortARSystemAlarmReport(line[1:])
             self.publish_alarm_message(arMsg.message, retain=True)
 
         # --- ENTRY/EXIT ---
         elif line[1:3] == "EX":
-            exMsg = ComfortEXEntryExitDelayStarted(line[1:])
+            exMsg = comfort_protocol.ComfortEXEntryExitDelayStarted(line[1:])
             self.entryexitdelay = exMsg.delay
             self.entryexit_timer()
             if exMsg.type == 1:
@@ -3133,7 +3108,7 @@ class Comfort2(mqtt.Client):
                 logger.debug("Ignoring OP (CacheState=False): %s", line)
                 return
             
-            opMsg = ComfortOPOutputActivationReport(line[1:])
+            opMsg = comfort_protocol.ComfortOPOutputActivationReport(line[1:])
             if opMsg.state < 2:
                 if 1 <= opMsg.output <= int(settings.COMFORT_OUTPUTS):
                     self.publish(
@@ -3146,7 +3121,7 @@ class Comfort2(mqtt.Client):
 
         # --- BULK OUTPUTS ---
         elif line[1:3] == "Y?":
-            yMsg = ComfortY_ReportAllOutputs(line[1:])
+            yMsg = comfort_protocol.ComfortY_ReportAllOutputs(line[1:])
             for opMsgY in yMsg.outputs:
                 if 1 <= opMsgY.output <= int(settings.COMFORT_OUTPUTS):
                     self.publish(
@@ -3159,7 +3134,7 @@ class Comfort2(mqtt.Client):
 
         # --- COUNTER BULK ---
         elif line[1:5] == "r?00":
-            cMsg = Comfort_R_ReportAllSensors(line[1:])
+            cMsg = comfort_protocol.Comfort_R_ReportAllSensors(line[1:])
             for cMsgr in cMsg.counters:
                 self.publish(
                     settings.ALARMCOUNTERTOPIC % cMsgr.counter,
@@ -3171,7 +3146,7 @@ class Comfort2(mqtt.Client):
 
         # --- SENSOR BULK ---
         elif line[1:5] == "r?01":
-            sMsg = Comfort_R_ReportAllSensors(line[1:])
+            sMsg = comfort_protocol.Comfort_R_ReportAllSensors(line[1:])
             for sMsgr in sMsg.sensors:
                 self.publish(
                     settings.ALARMSENSORTOPIC % sMsgr.sensor,
@@ -3183,7 +3158,7 @@ class Comfort2(mqtt.Client):
 
         # --- BULK FLAGS ---
         elif (line[1:3] == "f?") and (len(line) == 69):
-            fMsg = Comfortf_ReportAllFlags(line[1:])
+            fMsg = comfort_protocol.Comfortf_ReportAllFlags(line[1:])
             for fMsgf in fMsg.flags:
                 flag_id = fMsgf.flag
                 state = int(fMsgf.state)
@@ -3199,7 +3174,7 @@ class Comfort2(mqtt.Client):
 
         # --- BYPASS LIST ---
         elif line[1:3] == "b?":
-            bMsg = ComfortB_ReportAllBypassZones(line[1:])
+            bMsg = comfort_protocol.ComfortB_ReportAllBypassZones(line[1:])
             if bMsg.value == 0:
                 self.publish(settings.ALARMBYPASSTOPIC, 0, qos=2, retain=True)
             else:
@@ -3209,7 +3184,7 @@ class Comfort2(mqtt.Client):
         elif line[1:9] == "DL7FF904":
             if len(line[1:]) == 18:
                 settings.device_properties['uid'] = line[9:17]
-                decoded = ComfortSN_SerialNumberReport(line[5:17])
+                decoded = comfort_protocol.ComfortSN_SerialNumberReport(line[5:17])
                 if decoded.serial_number != settings.COMFORT_SERIAL:
                     settings.COMFORT_SERIAL = decoded.serial_number
                     settings.device_properties['SerialNumber'] = settings.COMFORT_SERIAL
@@ -3221,7 +3196,7 @@ class Comfort2(mqtt.Client):
             if not settings.CacheState:
                 logger.debug("Ignoring FL (CacheState=False): %s", line)
                 return
-            flMsg = ComfortFLFlagActivationReport(line[1:])
+            flMsg = comfort_protocol.ComfortFLFlagActivationReport(line[1:])
             payload = "1" if int(flMsg.state) else "0"
             self.publish(settings.ALARMFLAGTOPIC % flMsg.flag, payload, qos=2, retain=True)
             time.sleep(0.01)
@@ -3231,7 +3206,7 @@ class Comfort2(mqtt.Client):
             if not settings.CacheState:
                 logger.debug("Ignoring BY (CacheState=False): %s", line)
                 return
-            byMsg = ComfortBYBypassActivationReport(line[1:])
+            byMsg = comfort_protocol.ComfortBYBypassActivationReport(line[1:])
             settings.BypassCache[byMsg.zone] = byMsg.state if byMsg.zone <= int(settings.COMFORT_INPUTS) else None
 
             if byMsg.zone <= int(settings.COMFORT_INPUTS):

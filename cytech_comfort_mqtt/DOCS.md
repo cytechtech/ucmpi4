@@ -17,7 +17,7 @@ It provides:
 ## Installation
 
 1. In Home Assistant, go to:
-   **Settings → Add-ons → Add-on Store**
+   **Settings → Apps** then click the **Install App** button
 
 2. Click the **⋮ (three dots)** in the top-right corner → **Repositories**
 
@@ -72,7 +72,6 @@ To enable meaningful names (zones, outputs, etc.):
 
 The add-on will reload and update all entities.
 
-If no CCLX file is provided, default names will be used.
 
 ---
 
