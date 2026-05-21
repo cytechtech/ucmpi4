@@ -211,7 +211,7 @@ def _html(page_title: str, body: str) -> Response:
     .row {{ display: flex; gap: 12px; flex-wrap: wrap; }}
     .pill {{ display:inline-block; padding: 2px 10px; border-radius: 999px; background:#f2f2f2; }}
     code, pre {{ background:#f6f6f6; padding: 2px 6px; border-radius: 6px; }}
-    pre {{ padding: 10px; overflow:auto; }}
+    pre {{ padding: 10px; overflow: auto; max-height: 70vh; white-space: pre-wrap; }}
     .btn {{ padding: 10px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }}
     .btn-primary {{ border-color: #333; }}
     .warn {{ color: #8a4b00; }}
@@ -623,7 +623,7 @@ def view_log():
         ), 404
 
     text = RAM_LOG_FILE.read_text(encoding="utf-8", errors="replace")
-    safe_text = html.escape(text[-200000:])
+    safe_text = html.escape(text[-100000:])
 
     body = f"""
 <div class="card">

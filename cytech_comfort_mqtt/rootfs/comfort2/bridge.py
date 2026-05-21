@@ -1813,7 +1813,26 @@ class Comfort2(mqtt.Client):
                 self.add_descriptions(data_cclx)
                 self.publish_all_maps()
 
-            mqtt_device_comfort = getattr(self, "MQTT_DEVICE_COMFORT", None) or globals().get("MQTT_DEVICE_COMFORT", None)
+            mqtt_device_comfort = getattr(settings, "MQTT_DEVICE_COMFORT", None)
+
+            if mqtt_device_comfort is None:
+                self.ensure_mqtt_device_comfort()
+                mqtt_device_comfort = getattr(settings, "MQTT_DEVICE_COMFORT", None)
+
+            if mqtt_device_comfort is not None:
+                logger.info("Publishing discovery (inputs/outputs/flags/counters/sensors)")
+                self.publish_input_discovery(mqtt_device_comfort)
+                self.publish_output_discovery(mqtt_device_comfort)
+                self.publish_flag_discovery(mqtt_device_comfort)
+                self.publish_counter_discovery(mqtt_device_comfort)
+                self.publish_sensor_discovery(mqtt_device_comfort)
+                self.publish_timer_discovery(mqtt_device_comfort)
+                self.PublishBatteryVoltageDiscovery()
+                self.PublishBatteryVoltageStates()
+            else:
+                logger.error("MQTT_DEVICE_COMFORT still missing after fallback; discovery not published")
+
+
 
             if mqtt_device_comfort is not None:
                 logger.info("Publishing discovery (inputs/outputs/flags/counters/sensors)")
