@@ -25,11 +25,16 @@ from logging.handlers import RotatingFileHandler
 RAM_LOG_FILE = "/dev/shm/cytech_comfort_mqtt.log"
 
 def setup_ram_logging(level=logging.INFO):
+    print("SETUP_RAM_LOGGING CALLED")
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
 
-    root.handlers.clear()
-    root.propagate = False
+    # already configured?
+    for handler in root.handlers:
+        if isinstance(handler, RotatingFileHandler):
+            if getattr(handler, "baseFilename", "") == RAM_LOG_FILE:
+                return
+
+    root.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(
         '%(asctime)s %(levelname)-8s [%(name)s] %(message)s',
@@ -47,3 +52,4 @@ def setup_ram_logging(level=logging.INFO):
     file_handler.setFormatter(formatter)
 
     root.addHandler(file_handler)
+    print("RAM LOG FILE:", RAM_LOG_FILE)

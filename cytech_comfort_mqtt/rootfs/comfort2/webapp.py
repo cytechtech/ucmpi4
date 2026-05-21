@@ -23,45 +23,55 @@
 """
 Cytech Comfort add-on Ingress Web UI 
 
-- Ingress friendly (relative links)
 - Upload CCLX -> validate -> apply
 - Stores active file in /data/site.cclx and backup in /data/site.cclx.bak
 - Atomic apply + rollback on failure
 - Tracks discovery topics to clear stale entities on next apply
-
-You will likely need to adjust:
-- how cclx_parser is called (function name / return structure)
-- how discovery publish/clear functions are invoked (see TODO section)
 """
 
-import os
-import json
-import time
+# Standard library imports
 import hashlib
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
-from flask import Flask, request, redirect, Response, send_file
-from flask import url_for as flask_url_for # Avoid confusion with our own url_for that adds ingress prefix
-
+import html
+import json
+import logging
+import os
+import threading
+import time
 from datetime import datetime
-import html 
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
+# Logging setup import only
+from logging_config import setup_ram_logging
+
+# Third-party imports
 import paho.mqtt.client as mqtt
-import json, threading
-
-import cclx_parser
-
+from flask import Flask, Response, redirect, request, send_file
+from flask import url_for as flask_url_for
 from markupsafe import escape
 
-import logging
-logger = logging.getLogger("cytech_comfort_web")
-
+# Project imports
 from options import load_options, get_str, get_int
 
-import settings  
-
 _opts = load_options()
+
+log_verbosity = get_str(_opts, "log_verbosity", "INFO").upper()
+
+if log_verbosity not in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]:
+    log_verbosity = "INFO"
+
+setup_ram_logging(
+    level=getattr(logging, log_verbosity, logging.INFO)
+)
+
+logger = logging.getLogger(__name__)
+logging.getLogger("werkzeug").disabled = True
+
+logger.info("Web UI RAM logging initialised at %s", log_verbosity)
+
+import cclx_parser
+import settings
+
 
 MQTT_HOST = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 MQTT_PORT = get_int(_opts, "mqtt_broker_port", 1883)
