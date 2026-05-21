@@ -52,4 +52,5 @@ def setup_ram_logging(level=logging.INFO):
     file_handler.setFormatter(formatter)
 
     root.addHandler(file_handler)
+    root.warning("TEST RAM LOG WRITE")
     print("RAM LOG FILE:", RAM_LOG_FILE)
