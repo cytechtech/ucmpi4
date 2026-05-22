@@ -24,7 +24,6 @@ import secrets
 import logging
 from datetime import timedelta
 
-from cytech_comfort_mqtt.rootfs.comfort2.bridge import MQTT_DEVICE_COMFORT
 logger = logging.getLogger(__name__)
 
 
