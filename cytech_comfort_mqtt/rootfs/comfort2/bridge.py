@@ -2516,8 +2516,8 @@ class Comfort2(mqtt.Client):
 
                 if value != "-1":
                     self.publish(topic, value, qos=2, retain=True)
-                 else:
-                    logging.warning("Skipping %s publish because raw value = %r", label, raw_value)
+                else:
+                    logger.warning("Skipping %s publish because raw value = %r", label, raw_value)
 
             # Main board
             publish_voltage(
