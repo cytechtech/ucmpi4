@@ -175,11 +175,11 @@ setup_ram_logging(
     level=getattr(logging, settings.LOG_VERBOSITY, logging.INFO)
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bridge")
 
-logger.info("RAM logging initialised at %s", settings.LOG_VERBOSITY)
+logger.debug("RAM logging initialised at %s", settings.LOG_VERBOSITY)
 
-logger.info("Completed importing addon configuration options")
+logger.debug("Completed importing addon configuration options")
 logger.info(
     "Configured serial mode: %s -> baudrate %d",
     serial_mode,
@@ -314,7 +314,7 @@ class Comfort2(mqtt.Client):
         if mqtt_username:
             self.username_pw_set(mqtt_username, mqtt_password)
         else:
-            logger.info("MQTT: No username configured, connecting without authentication")
+            logger.debug("MQTT: No username configured, connecting without authentication")
         self.version = mqtt_version
 
         self._last_reload_ts = 0.0
@@ -353,7 +353,7 @@ class Comfort2(mqtt.Client):
 
             logger.info('MQTT Broker Connection %s', str(rc))
 
-            logger.info("Clearing discovery (inputs/outputs/flags)")
+            logger.debug("Clearing discovery (inputs/outputs/flags)")
             self.clear_input_discovery()
             self.clear_output_discovery()
             self.clear_flag_discovery()
@@ -473,7 +473,6 @@ class Comfort2(mqtt.Client):
             return
 
         if msg.topic == settings.RELOADTOPIC:
-            logger.info("In RELOADTOPIC, topic is %s",msg.topic )
             self._on_reload_message(msg)
             return
 
@@ -556,10 +555,7 @@ class Comfort2(mqtt.Client):
                 
                 ID = str(f"{int(msgstr_cleaned):02X}")
 
-                #logger.info("msgstr: %s", msgstr.strip('"'))
-                #logger.info("msgstr type: %s", type(msgstr.strip('"')))
 
-                #logger.info("ID: %s", ID)
                 if msgstr_cleaned == '0':
                     Command = "\x03D?0000\r"
                     self.serial.write(Command.encode()) # Battery and DC Supply Status Update
@@ -772,7 +768,7 @@ class Comfort2(mqtt.Client):
             self.pending_counter_updates.clear()
             self.pending_sensor_updates.clear()
 
-        logger.info("Cancelled all pending counter/sensor updates")
+        logger.debug("Cancelled all pending counter/sensor updates")
 
     def set_counter(self, counter: int, value: int) -> None:
         """Write a counter value to Comfort."""
@@ -783,7 +779,7 @@ class Comfort2(mqtt.Client):
         if self.connected:
             self.serial.write(("\x03C!%02X%s\r" % (counter, self.DecimalToSigned16(value))).encode())
             settings.SAVEDTIME = datetime.now()
-            logger.info("Sent counter %d = %d to Comfort", counter, value)
+            logger.debug("Sent counter %d = %d to Comfort", counter, value)
         else:
             logger.warning("Counter %d update ignored because Comfort is not connected", counter)
 
@@ -796,7 +792,7 @@ class Comfort2(mqtt.Client):
         if self.connected:
             self.serial.write(("\x03s!%02X%s\r" % (sensor, self.DecimalToSigned16(value))).encode())
             settings.SAVEDTIME = datetime.now()
-            logger.info("Sent sensor %d = %d to Comfort", sensor, value)
+            logger.debug("Sent sensor %d = %d to Comfort", sensor, value)
         else:
             logger.warning("Sensor %d update ignored because Comfort is not connected", sensor)
 
@@ -926,7 +922,6 @@ class Comfort2(mqtt.Client):
 
     def readcurrentstate(self):
  
-        #logger.info("In readcurrentstate connected = %d", self.connected)
         if self.connected == True:
 
             settings.device_properties['BatteryVoltageMain'] = "-1"
@@ -952,7 +947,7 @@ class Comfort2(mqtt.Client):
             settings.device_properties['CPUType'] = 'N/A'                  # Reset CPU type to default
 
             #get Bypassed Zones
-            logger.info("Requesting Bypassed Zones")
+            logger.debug("Requesting Bypassed Zones")
             self.serial.write("\x03b?00\r".encode())       # b?00 Bypassed Zones first
             settings.SAVEDTIME = datetime.now()
             time.sleep(0.05)
@@ -980,7 +975,7 @@ class Comfort2(mqtt.Client):
 
             installed_slaves = max(0, min(installed_slaves, 7))
 
-            logger.info("Requesting battery/DC voltages for %d installed SEM boards", installed_slaves)
+            logger.debug("Requesting battery/DC voltages for %d installed SEM boards", installed_slaves)
 
             for sem in range(1, installed_slaves + 1):
                 sem_address_dec = sem + 32          # SEM1=33, SEM2=34 ... SEM7=39
@@ -989,13 +984,13 @@ class Comfort2(mqtt.Client):
                 # Battery voltage/status
                 self.serial.write((f"\x03D?{sem_address_hex}01\r").encode())
                 settings.SAVEDTIME = datetime.now()
-                logger.info("Requested SEM %d battery status using D?%s01", sem, sem_address_hex)
+                logger.debug("Requested SEM %d battery status using D?%s01", sem, sem_address_hex)
                 time.sleep(0.05)
 
                 # DC supply voltage/status
                 self.serial.write((f"\x03D?{sem_address_hex}02\r").encode())
                 settings.SAVEDTIME = datetime.now()
-                logger.info("Requested SEM %d DC supply status using D?%s02", sem, sem_address_hex)
+                logger.debug("Requested SEM %d DC supply status using D?%s02", sem, sem_address_hex)
                 time.sleep(0.05)
 
                       
@@ -1509,7 +1504,7 @@ class Comfort2(mqtt.Client):
 
         if self.connected == True:  #set current date and time if COMFORT_TIME Flag is set to True
             if settings.COMFORT_TIME == 'True':
-                logger.info('Setting Comfort Date/Time')
+                logger.debug('Setting Comfort Date/Time')
                 now = datetime.now()
                 self.serial.write(("\x03DT%02d%02d%02d%02d%02d%02d\r" % (now.year, now.month, now.day, now.hour, now.minute, now.second)).encode())
                 settings.SAVEDTIME = datetime.now()
@@ -1744,10 +1739,10 @@ class Comfort2(mqtt.Client):
 
 
     def _on_reload_message(self, msg):
-        logger.info("In _on_reload_message payload=%r retain=%r", msg.payload, getattr(msg, "retain", False))
+        logger.debug("In _on_reload_message payload=%r retain=%r", msg.payload, getattr(msg, "retain", False))
 
         if getattr(msg, "retain", False):
-            logger.info("Reload: ignored retained message")
+            logger.debug("Reload: ignored retained message")
             return
 
         now = time.monotonic()
@@ -1756,7 +1751,7 @@ class Comfort2(mqtt.Client):
             return
 
         payload_raw = (msg.payload or b"").decode("utf-8", errors="replace").strip()
-        logger.info("Reload: received payload=%r", payload_raw)
+        logger.debug("Reload: received payload=%r", payload_raw)
 
         reason = None
         key_ok = True
@@ -1795,7 +1790,6 @@ class Comfort2(mqtt.Client):
         logger.warning("Reload requested via source=%s reason=%r", source, reason)
 
         try:
-            logger.info("Clearing discovery (inputs/outputs/flags)")
             self.clear_input_discovery()
             self.clear_output_discovery()
             self.clear_flag_discovery()
@@ -1819,7 +1813,6 @@ class Comfort2(mqtt.Client):
                 mqtt_device_comfort = getattr(settings, "MQTT_DEVICE_COMFORT", None)
 
             if mqtt_device_comfort is not None:
-                logger.info("Publishing discovery (inputs/outputs/flags/counters/sensors)")
                 self.publish_input_discovery(mqtt_device_comfort)
                 self.publish_output_discovery(mqtt_device_comfort)
                 self.publish_flag_discovery(mqtt_device_comfort)
@@ -1834,7 +1827,6 @@ class Comfort2(mqtt.Client):
 
 
             if mqtt_device_comfort is not None:
-                logger.info("Publishing discovery (inputs/outputs/flags/counters/sensors)")
                 self.publish_input_discovery(mqtt_device_comfort)
                 self.publish_output_discovery(mqtt_device_comfort)
                 self.publish_flag_discovery(mqtt_device_comfort)
@@ -1876,8 +1868,7 @@ class Comfort2(mqtt.Client):
         This helps HA forget old entity IDs when discovery naming has changed.
         """
         max_inputs = int(getattr(settings, "MAX_ZONES", 96) or 96)
-        #logger.info("DISCOVERY CLEAR inputs: domain=%s max_inputs=%d", settings.DOMAIN, max_inputs)
-
+ 
         for i in range(1, max_inputs + 1):
             topics = [
                 # current padded format
@@ -1888,7 +1879,6 @@ class Comfort2(mqtt.Client):
             ]
 
             for topic in topics:
-               # logger.info("Clearing input discovery topic: %s", topic)
                 self.publish(topic, "", qos=1, retain=True)
                 time.sleep(0.005)
 
@@ -1899,7 +1889,6 @@ class Comfort2(mqtt.Client):
         This removes stale HA entities from previous discovery naming schemes.
         """
         max_outputs = int(getattr(settings, "MAX_OUTPUTS", 96) or 96)
-        #logger.info("DISCOVERY CLEAR outputs: domain=%s max_outputs=%d", settings.DOMAIN, max_outputs)
 
         for i in range(1, max_outputs + 1):
             topics = [
@@ -1918,7 +1907,6 @@ class Comfort2(mqtt.Client):
             ]
 
             for topic in topics:
-                #logger.info("Clearing output discovery topic: %s", topic)
                 self.publish(topic, "", qos=1, retain=True)
                 time.sleep(0.005)
 
@@ -1948,23 +1936,17 @@ class Comfort2(mqtt.Client):
 
 
     def clear_timer_discovery(self):
-        #logging.info("clear_timer_discovery: START")
 
         for i in range(1, settings.COMFORT_TIMERS + 1):
             number_topic = f"homeassistant/number/{settings.DOMAIN}/timer{i:03d}/config"
             sensor_topic = f"homeassistant/sensor/{settings.DOMAIN}/timer{i:03d}/config"
 
-            # logging.info(
-            #     "clear_timer_discovery: clearing timer=%03d number_topic=%s sensor_topic=%s",
-            #     i, number_topic, sensor_topic
-            # )
 
             self.publish(number_topic, "", qos=2, retain=True)
             self.publish(sensor_topic, "", qos=2, retain=True)
             time.sleep(0.005)
 
-        #logging.info("clear_timer_discovery: END")
-
+  
 
 
     def clear_battery_voltage_discovery(self):
@@ -2015,7 +1997,7 @@ class Comfort2(mqtt.Client):
     def publish_output_discovery(self, mqtt_device):
         try:
             max_outputs = int(getattr(settings, "COMFORT_OUTPUTS", 0) or 0)
-            logger.info("publish_output_discovery: COMFORT_OUTPUTS=%r", getattr(settings, "COMFORT_OUTPUTS", None))
+            logger.debug("publish_output_discovery: COMFORT_OUTPUTS=%r", getattr(settings, "COMFORT_OUTPUTS", None))
         except Exception as e:
             logger.exception("Error reading COMFORT_OUTPUTS: %s", e)
             max_outputs = 0
@@ -2151,10 +2133,6 @@ class Comfort2(mqtt.Client):
 
             if i < 1 or i > settings.UI_FLAG_COUNT:  # Only publish flags that are within the UI-supported range
                 continue
-            # logger.info(
-            #     "publish_flag_discovery: raw key=%r value=%r type=%s",
-            #     key, value, type(value).__name__
-            # )
 
 
             if isinstance(value, dict):
@@ -2164,11 +2142,7 @@ class Comfort2(mqtt.Client):
             else:
                 flag_name = f"Flag{i:03d}"
 
-            # logger.info(
-            #     "publish_flag_discovery: flag=%s resolved_name=%r discovery_topic=%s",
-            #     i, flag_name, f"homeassistant/switch/{settings.DOMAIN}/flag{i:03d}/config"
-            # )
-                
+               
             state_topic = settings.ALARMFLAGTOPIC % i
             command_topic = settings.ALARMFLAGCOMMANDTOPIC % i
             discovery_topic = f"homeassistant/switch/{settings.DOMAIN}/flag{i:03d}/config"
@@ -2364,12 +2338,6 @@ class Comfort2(mqtt.Client):
                 "device": mqtt_device,
             })
 
-            # logging.info(
-            #     "publish_timer_discovery: publishing timer=%03d name=%r discovery_topic=%s state_topic=%s",
-            #     i, timer_name, discovery_topic, state_topic
-            # )
-            # logging.debug("publish_timer_discovery: payload=%s", mqtt_msg)
-
             self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
             time.sleep(0.01)
 
@@ -2399,11 +2367,6 @@ class Comfort2(mqtt.Client):
             installed_slaves = 0
 
         installed_slaves = max(0, min(installed_slaves, 7))
-
-        # logger.info(
-        #     "Publishing battery voltage discovery for main board and %d installed SEM boards",
-        #     installed_slaves
-        # )
 
         # Clear retained discovery for SEM boards above the installed count
         for sem in range(installed_slaves + 1, 8):
@@ -2461,7 +2424,6 @@ class Comfort2(mqtt.Client):
             }
 
             self.publish(discovery_topic, json.dumps(payload), qos=2, retain=True)
-            #logger.info("Published battery voltage discovery: %s", discovery_topic)
             time.sleep(0.05)
 
 
@@ -2479,30 +2441,17 @@ class Comfort2(mqtt.Client):
         # Clamp to valid SEM range
         installed_slaves = max(0, min(installed_slaves, 7))
 
-        # logger.info(
-        #     "Publishing battery voltage states for main board and %d installed SEM boards",
-        #     installed_slaves
-        # )
-
         def publish_voltage(topic, raw_value, label):
             try:
                 value = f"{float(raw_value):.2f}"
             except Exception:
                 value = "-1"
 
-            # logger.info(
-            #     "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
-            #     topic,
-            #     label,
-            #     value,
-            #     raw_value
-            # )
-
             if value != "-1":
                 self.publish(topic, value, qos=2, retain=True)
-                logger.info("Published %s: %s -> %s", label, topic, value)
+                logger.debug("Published %s: %s -> %s", label, topic, value)
             else:
-                logger.warning("Skipping %s publish because raw value = %r", label, raw_value)
+                logger.debug("Skipping %s publish because raw value = %r", label, raw_value)
 
         # --------------------------------------------------
         # 1. CLEAR OLD SEM STATE TOPICS
@@ -2512,11 +2461,9 @@ class Comfort2(mqtt.Client):
             dc_topic = f"{settings.DOMAIN}/alarm/dc_supply_slave{sem}_voltage"
 
             self.publish(battery_topic, "", qos=2, retain=True)
-            #logger.info("Cleared retained battery state topic: %s", battery_topic)
             time.sleep(0.02)
 
             self.publish(dc_topic, "", qos=2, retain=True)
-            #logger.info("Cleared retained DC supply state topic: %s", dc_topic)
             time.sleep(0.02)
 
         # --------------------------------------------------
@@ -2567,18 +2514,9 @@ class Comfort2(mqtt.Client):
                 except Exception:
                     value = "-1"
 
-                # logging.info(
-                #     "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
-                #     topic,
-                #     label,
-                #     value,
-                #     raw_value
-                # )
-
                 if value != "-1":
                     self.publish(topic, value, qos=2, retain=True)
-                    # logging.info("Published %s: %s -> %s", label, topic, value)
-                else:
+                 else:
                     logging.warning("Skipping %s publish because raw value = %r", label, raw_value)
 
             # Main board
@@ -2689,7 +2627,7 @@ class Comfort2(mqtt.Client):
                 # Reconnect logic (unchanged)
                 settings.COMFORTCONNECTED = False
                 settings.FIRST_LOGIN = True
-                logger.error('Lost connection to Comfort, reconnecting...')
+                logger.debug('Lost connection to Comfort, reconnecting...')
 
                 if settings.BROKERCONNECTED:
                     self.publish(settings.ALARMAVAILABLETOPIC, 0, qos=2, retain=True)
@@ -2727,7 +2665,6 @@ class Comfort2(mqtt.Client):
 
 
     def serial_reader(self):
-        logger.info("Serial reader thread started")
 
         while self.serial_running:
             try:
@@ -2774,12 +2711,12 @@ class Comfort2(mqtt.Client):
         if line[1:3] == "LU":
             luMsg = comfort_protocol.ComfortLUUserLoggedIn(line[1:])
             if luMsg.user != 0:
-                logger.info('Comfort Login Ok - User %s', (luMsg.user if luMsg.user != 254 else 'Engineer'))
+                logger.debug('Comfort Login Ok - User %s', (luMsg.user if luMsg.user != 254 else 'Engineer'))
 
                 if settings.BROKERCONNECTED:
                     time.sleep(1)
                 else:
-                    logger.info("Waiting for MQTT Broker to come Online...")
+                    logger.debug("Waiting for MQTT Broker to come Online...")
 
                 self.connected = True
                 settings.COMFORTCONNECTED = True
@@ -2793,7 +2730,7 @@ class Comfort2(mqtt.Client):
                 self.setdatetime()
 
                 if settings.FIRST_LOGIN:
-                    logger.info("Login - reading current state from Comfort...")
+                    logger.debug("Login - reading current state from Comfort...")
                     self.readcurrentstate()
                     settings.FIRST_LOGIN = False
 
@@ -2826,22 +2763,14 @@ class Comfort2(mqtt.Client):
                 comfort_dt = datetime(year, month, day, hour, minute, second)
                 logger.debug("Comfort date/time report: %s", comfort_dt.isoformat())
 
-                # Optional MQTT publish
-                # self.publish(
-                #     "cytech_comfort_mqtt/alarm/datetime",
-                #     comfort_dt.isoformat(),
-                #     qos=2,
-                #     retain=True
-                # )
-
             except Exception as e:
-                logger.warning("Failed to parse DT line '%s': %s", line, e)
+                logger.debug("Failed to parse DT line '%s': %s", line, e)
 
 
         # --- ALARM EVENT / LOG ---
         elif line[1:3] == "AL":
             payload = line[3:]
-            logger.info("Comfort AL report: %s", payload)
+            logger.debug("Comfort AL report: %s", payload)
 
         # --- INPUTS ---
         elif line[1:3] == "IP":
@@ -2996,7 +2925,7 @@ class Comfort2(mqtt.Client):
 
             current_firmware = float(str(VMsg.version) + "." + str(VMsg.revision).zfill(3))
             if current_firmware >= settings.SupportedFirmware:
-                logging.info(
+                logging.debug(
                     "%s detected (Supported Firmware %d.%03d)",
                     settings.models[int(settings.device_properties['ComfortFileSystem'])]
                     if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown device",
@@ -3045,7 +2974,7 @@ class Comfort2(mqtt.Client):
 
         elif line[1:3] == "D?":
             comfort_protocol.Comfort_D_SystemVoltageReport(line[1:])
-            logger.info(
+            logger.debug(
                 "BatteryVoltageMain=%s ChargeVoltageMain=%s BatteryStatus=%s ChargerStatus=%s",
                 settings.device_properties.get("BatteryVoltageMain"),
                 settings.device_properties.get("ChargeVoltageMain"),
@@ -3059,8 +2988,8 @@ class Comfort2(mqtt.Client):
             if settings.COMFORT_SERIAL != SNMsg.serial_number:
                 pass
             settings.COMFORT_KEY = SNMsg.refreshkey
-            logging.info("Refresh Key: %s", settings.COMFORT_KEY)
-            logging.info("Serial Number: %s", settings.COMFORT_SERIAL)
+            logging.debug("Refresh Key: %s", settings.COMFORT_KEY)
+            logging.debug("Serial Number: %s", settings.COMFORT_SERIAL)
             settings.device_properties['SerialNumber'] = settings.COMFORT_SERIAL
             self.UpdateDeviceInfo(True)
 
@@ -3092,7 +3021,7 @@ class Comfort2(mqtt.Client):
 
                 self.publish_alarm_message(message_topic, retain=True)
             else:
-                logging.info("Ready To Arm...")
+                logging.debug("Ready To Arm...")
 
         # --- ALARM ---
         elif line[1:3] == "AM":
@@ -3267,7 +3196,6 @@ class Comfort2(mqtt.Client):
         try:
             payload = json.dumps(payload_obj, ensure_ascii=False)
             self.publish(f"{settings.DOMAIN}/meta/{name}", payload, qos=qos, retain=True)
-            #logger.info("Published meta '%s' (%d bytes)", name, len(payload.encode("utf-8")))
         except Exception as e:
             logger.exception("Failed to publish meta '%s': %s", name, e)
 

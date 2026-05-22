@@ -67,7 +67,7 @@ setup_ram_logging(
 logger = logging.getLogger("webapp")
 logging.getLogger("werkzeug").disabled = True
 
-logger.info("Web UI RAM logging initialised at %s", log_verbosity)
+logger.debug("Web UI RAM logging initialised at %s", log_verbosity)
 
 import cclx_parser
 import settings
