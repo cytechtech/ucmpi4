@@ -613,6 +613,15 @@ def rollback():
     return _html("Rollback", f"<p class='ok'>Rollback complete at {_now()}.</p><p><a href='{url_for('home')}'>Back</a></p>")
 
 
+@app.get("/log/raw")
+def raw_log():
+    if not RAM_LOG_FILE.exists():
+        return Response("", mimetype="text/plain")
+
+    text = RAM_LOG_FILE.read_text(encoding="utf-8", errors="replace")
+    return Response(text[-200000:], mimetype="text/plain")
+
+
 @app.get("/log")
 def view_log():
     if not RAM_LOG_FILE.exists():
@@ -623,7 +632,7 @@ def view_log():
         ), 404
 
     text = RAM_LOG_FILE.read_text(encoding="utf-8", errors="replace")
-    safe_text = html.escape(text[-100000:])
+    safe_text = html.escape(text[-200000:])
 
     body = f"""
 <div class="card">
@@ -640,7 +649,9 @@ def view_log():
   <div>Showing last <code>200 KB</code>.</div>
 
   <div class="row" style="margin-top:10px;">
-    <a class="btn btn-primary" href="{url_for('view_log')}">Refresh</a>
+    <button class="btn btn-primary" type="button" onclick="refreshLog()">Refresh</button>
+    <button class="btn" type="button" id="autoRefreshLogBtn" onclick="toggleLogAutoRefresh()">Auto refresh: OFF</button>
+    <button class="btn" type="button" id="reverseLogBtn" onclick="toggleLogReverse()">Latest first: OFF</button>
     <a class="btn" href="{url_for('download_log')}">Download full log</a>
 
     <form method="post" action="{url_for('clear_log')}" style="display:inline;">
@@ -650,11 +661,64 @@ def view_log():
 </div>
 
 <div class="card">
-  <pre>{safe_text}</pre>
+  <pre id="logOutput">{safe_text}</pre>
 </div>
+
+<script>
+  let logAutoRefreshTimer = null;
+  let logReversed = false;
+  const rawLogUrl = "{url_for('raw_log')}";
+
+  function renderLog(text) {{
+    const logBox = document.getElementById("logOutput");
+    let displayText = text || "";
+
+    if (logReversed) {{
+      displayText = displayText.split("\\n").reverse().join("\\n");
+    }}
+
+    logBox.textContent = displayText;
+
+    if (logReversed) {{
+      logBox.scrollTop = 0;
+    }} else {{
+      logBox.scrollTop = logBox.scrollHeight;
+    }}
+  }}
+
+  function refreshLog() {{
+    fetch(rawLogUrl, {{ cache: "no-store" }})
+      .then(response => response.text())
+      .then(text => renderLog(text))
+      .catch(error => console.error("Failed to refresh log:", error));
+  }}
+
+  function toggleLogAutoRefresh() {{
+    const btn = document.getElementById("autoRefreshLogBtn");
+
+    if (logAutoRefreshTimer) {{
+      clearInterval(logAutoRefreshTimer);
+      logAutoRefreshTimer = null;
+      btn.textContent = "Auto refresh: OFF";
+      return;
+    }}
+
+    refreshLog();
+    logAutoRefreshTimer = setInterval(refreshLog, 2000);
+    btn.textContent = "Auto refresh: ON";
+  }}
+
+  function toggleLogReverse() {{
+    const btn = document.getElementById("reverseLogBtn");
+
+    logReversed = !logReversed;
+    btn.textContent = logReversed ? "Latest first: ON" : "Latest first: OFF";
+
+    refreshLog();
+  }}
+</script>
 """
     return _html("Cytech Comfort Logs", body)
-
 
 @app.get("/log/download")
 def download_log():
