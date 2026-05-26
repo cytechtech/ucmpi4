@@ -108,7 +108,10 @@ def start_passthrough_mode():
             logger.warning("Closing Comfort serial port for passthrough")
 
             mqttc.serial_running = False
-            mqttc.serial.close()
+            time.sleep(0.2)
+
+            if mqttc.serial is not None and mqttc.serial.is_open:
+                mqttc.serial.close()
 
     except Exception:
         logger.exception("Failed to close Comfort serial for passthrough")
@@ -2718,6 +2721,19 @@ class Comfort2(mqtt.Client):
     def serial_reader(self):
 
         while self.serial_running:
+
+            if settings.PASSTHROUGH_ACTIVE:
+                logger.info("Serial reader stopping for passthrough")
+                break
+
+            if self.serial is None:
+                logger.info("Serial reader stopping because serial is None")
+                break
+
+            if not self.serial.is_open:
+                logger.info("Serial reader stopping because serial port is closed")
+                break
+
             try:
                 raw = self.serial.read_until(b'\r')
 
