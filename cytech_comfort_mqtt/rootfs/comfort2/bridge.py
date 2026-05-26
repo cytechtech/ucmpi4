@@ -98,6 +98,21 @@ if serial_mode == "CM4Pi on CM9001":
 else:
     settings.COMFORT_BAUDRATE = 115200
 
+passthrough_server = None
+
+if settings.PASSTHROUGH_ENABLED:
+    passthrough_server = ComfortPassthroughServer(
+        port=settings.PASSTHROUGH_PORT,
+        serial_port="/dev/serial0",
+        baudrate=settings.COMFORT_BAUDRATE,
+    )
+
+    logger.info(
+        "Passthrough server configured on TCP port %s",
+        settings.PASSTHROUGH_PORT,
+    )
+
+
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
 settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
