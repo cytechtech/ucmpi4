@@ -109,7 +109,6 @@ def start_passthrough_mode():
 
             mqttc.serial_running = False
             mqttc.serial.close()
-            mqttc.serial = None
 
     except Exception:
         logger.exception("Failed to close Comfort serial for passthrough")
