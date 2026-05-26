@@ -407,7 +407,7 @@ def home():
     upload_info = _file_info(UPLOAD_CCLX)
     upload_meta = _read_upload_meta()
 
-    notice = request.args.get("notice")  # e.g. "uploaded"
+    notice = request.args.get("notice")
     banner_html = ""
 
     if notice == "uploaded":
@@ -426,94 +426,111 @@ def home():
 </div>
 """
 
+    mode_text = "Comfigurator Maintenance Mode" if _get_passthrough_mode() else "Normal MQTT Mode"
+
     body = f"""{banner_html}
 
 <div class="card">
   <div><strong>Cytech Comfort Add-on</strong></div>
   <div class="row" style="margin-top:10px;">
-    <a class="btn btn-primary" href="{url_for('home')}">CCLX File</a>
+    <a class="btn btn-primary" href="{url_for('home')}">Main</a>
     <a class="btn" href="{url_for('view_log')}">Logs</a>
   </div>
 </div>
 
-<div class="card">
-  <div><strong>Status</strong></div>
-  <div>Time: <span class="pill">{_now()}</span></div>
-  <div>Active CCLX: {"<span class='ok'>present</span>" if ACTIVE_CCLX.exists() else "<span class='warn'>missing</span>"}</div>
-  <div>Reload pending: {"<span class='warn'>yes</span>" if RELOAD_FLAG.exists() else "<span class='ok'>no</span>"}</div>
-  <div>Active SHA256: <code>{active_sha or "-"}</code></div>
-
-  <div>Uploaded (staged): {"<span class='ok'>present</span>" if upload_info.get("exists") else "<span class='warn'>none</span>"}</div>
-  {f"<div>Original filename: <code>{html.escape(str(upload_meta.get('original_filename','-')))}</code></div>" if upload_meta else ""}
-  {f"<div>Uploaded at: <code>{html.escape(str(upload_meta.get('uploaded_at','-')))}</code></div>" if upload_meta else ""}
-  {f"<div>Type: <code>{html.escape(str(upload_meta.get('content_type','-')))}</code></div>" if upload_meta else ""}
-
-  <div>Upload path: <code>{UPLOAD_CCLX}</code></div>
-  <div>Upload size: <code>{upload_info.get("size","-")}</code> bytes</div>
-  <div>Upload modified: <code>{upload_info.get("mtime","-")}</code></div>
-  <div>Upload SHA256: <code>{upload_info.get("sha256") or "-"}</code></div>
-  {f"<div class='row'><a class='btn' href='{url_for('download')}'>Download uploaded CCLX</a></div>" if upload_info.get("exists") else ""}
-  <div>Backup: {"<span class='ok'>present</span>" if BACKUP_CCLX.exists() else "<span class='warn'>none</span>"}</div>
-  <div>Backup SHA256: <code>{backup_sha or "-"}</code></div>
-</div>
-
-<div class="card">
-  <div><strong>Comfort Bridge Mode</strong></div>
-
-  <div>
-    Current mode:
-    <span class="pill">
-      {"Comfigurator Maintenance Mode" if _get_passthrough_mode() else "Normal MQTT Mode"}
-    </span>
+<div class="card" style="border-color:#333;">
+  <div><strong>1) Comfort Bridge Mode</strong></div>
+  <div style="margin-top:8px;">
+    Current mode: <span class="pill">{mode_text}</span>
   </div>
 
   <div class="warn" style="margin-top:10px;">
-    In maintenance mode, Home Assistant stops communicating with Comfort.
-    Use this while running Comfigurator.
+    In Comfigurator Maintenance Mode, Home Assistant stops communicating with Comfort.
+    Use this while running Comfigurator, then return to Normal MQTT Mode when finished.
   </div>
 
-  <div class="row" style="margin-top:10px;">
+  <div class="row" style="margin-top:12px;">
     <form method="post" action="./passthrough/enable" style="display:inline;">
-      <button class="btn" type="submit">
-        Enable Comfigurator Mode
-      </button>
+      <button class="btn" type="submit">Enable Comfigurator Mode</button>
     </form>
 
     <form method="post" action="./passthrough/disable" style="display:inline;">
-      <button class="btn btn-primary" type="submit">
-        Return to Normal MQTT Mode
-      </button>
+      <button class="btn btn-primary" type="submit">Return to Normal MQTT Mode</button>
     </form>
   </div>
 </div>
 
 <div class="card">
-  <div><strong>1) Upload CCLX</strong></div>
-  <form method="post" action="./upload" enctype="multipart/form-data">
+  <div><strong>2) Logs</strong></div>
+  <div>View the live RAM log for bridge, web UI and passthrough activity.</div>
+  <div class="row" style="margin-top:10px;">
+    <a class="btn btn-primary" href="{url_for('view_log')}">Open Logs</a>
+    <a class="btn" href="{url_for('download_log')}">Download Full Log</a>
+  </div>
+</div>
+
+<div class="card">
+  <div><strong>3) CCLX Configuration</strong></div>
+  <div class="warn" style="margin-top:6px;">
+    Use this section to upload, validate and apply a Comfort CCLX file.
+  </div>
+</div>
+
+<div class="card">
+  <div><strong>CCLX Status</strong></div>
+  <div>Time: <span class="pill">{_now()}</span></div>
+  <div>Active CCLX: {"<span class='ok'>present</span>" if ACTIVE_CCLX.exists() else "<span class='warn'>missing</span>"}</div>
+  <div>Uploaded CCLX: {"<span class='ok'>present</span>" if upload_info.get("exists") else "<span class='warn'>none</span>"}</div>
+  <div>Reload pending: {"<span class='warn'>yes</span>" if RELOAD_FLAG.exists() else "<span class='ok'>no</span>"}</div>
+  <div>Backup: {"<span class='ok'>present</span>" if BACKUP_CCLX.exists() else "<span class='warn'>none</span>"}</div>
+
+  <details style="margin-top:10px;">
+    <summary>Show advanced CCLX details</summary>
+    <div style="margin-top:8px;">
+      <div>Active SHA256: <code>{active_sha or "-"}</code></div>
+      {f"<div>Original filename: <code>{html.escape(str(upload_meta.get('original_filename','-')))}</code></div>" if upload_meta else ""}
+      {f"<div>Uploaded at: <code>{html.escape(str(upload_meta.get('uploaded_at','-')))}</code></div>" if upload_meta else ""}
+      {f"<div>Type: <code>{html.escape(str(upload_meta.get('content_type','-')))}</code></div>" if upload_meta else ""}
+      <div>Upload path: <code>{UPLOAD_CCLX}</code></div>
+      <div>Upload size: <code>{upload_info.get("size","-")}</code> bytes</div>
+      <div>Upload modified: <code>{upload_info.get("mtime","-")}</code></div>
+      <div>Upload SHA256: <code>{upload_info.get("sha256") or "-"}</code></div>
+      <div>Backup SHA256: <code>{backup_sha or "-"}</code></div>
+    </div>
+  </details>
+
+  {f"<div class='row' style='margin-top:10px;'><a class='btn' href='{url_for('download')}'>Download uploaded CCLX</a></div>" if upload_info.get("exists") else ""}
+</div>
+
+<div class="card">
+  <div><strong>Upload CCLX</strong></div>
+  <form method="post" action="./upload" enctype="multipart/form-data" style="margin-top:10px;">
     <input type="file" name="file" accept=".cclx,.txt" required />
     <button class="btn btn-primary" type="submit">Upload</button>
   </form>
 </div>
 
 <div class="card">
-  <div><strong>2) Validate uploaded CCLX</strong></div>
-  <form method="post" action="./validate">
+  <div><strong>Validate uploaded CCLX</strong></div>
+  <form method="post" action="./validate" style="margin-top:10px;">
     <button class="btn" type="submit">Validate</button>
   </form>
 </div>
 
 <div class="card">
-  <div><strong>3) Apply (activate + request rebuild)</strong></div>
-  <div class="warn">This will clear old MQTT discovery entities and recreate them from the uploaded CCLX.</div>
+  <div><strong>Apply CCLX</strong></div>
+  <div class="warn">
+    This will clear old MQTT discovery entities and recreate them from the uploaded CCLX.
+  </div>
   <div>The bridge will reload the CCLX and rebuild MQTT discovery within a few seconds.</div>
-  <form method="post" action="./apply">
+  <form method="post" action="./apply" style="margin-top:10px;">
     <button class="btn btn-primary" type="submit">Apply</button>
   </form>
 </div>
 
 <div class="card">
   <div><strong>Rollback</strong></div>
-  <form method="post" action="./rollback">
+  <form method="post" action="./rollback" style="margin-top:10px;">
     <button class="btn" type="submit">Rollback to previous active</button>
   </form>
 </div>

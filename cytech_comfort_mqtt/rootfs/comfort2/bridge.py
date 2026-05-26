@@ -137,7 +137,10 @@ def start_passthrough_mode():
 
 
 def stop_passthrough_mode():
-    logger.warning("Comfigurator TCP client disconnected; staying in passthrough mode")
+    if settings.PASSTHROUGH_ACTIVE:
+        logger.warning("Comfigurator TCP client disconnected; Comfigurator mode remains enabled")
+    else:
+        logger.warning("Comfigurator TCP client disconnected; MQTT bridge mode is active")
 
 passthrough_server = None
 
