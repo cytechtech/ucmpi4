@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Comfort Comfigurator TCP passthrough
 PASSTHROUGH_ENABLED = True
-PASSTHROUGH_PORT = 1001
+PASSTHROUGH_PORT = 10001
 PASSTHROUGH_ACTIVE = False
 
 DOMAIN = "cytech_comfort_mqtt"

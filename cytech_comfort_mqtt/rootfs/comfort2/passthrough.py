@@ -41,7 +41,7 @@ class ComfortPassthroughServer:
     def __init__(
         self,
         host="0.0.0.0",
-        port=1001,
+        port=10001,
         serial_port="/dev/serial0",
         baudrate=115200,
         on_start=None,
