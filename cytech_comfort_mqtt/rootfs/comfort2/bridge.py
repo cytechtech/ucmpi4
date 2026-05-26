@@ -98,28 +98,46 @@ if serial_mode == "CM4Pi on CM9001":
 else:
     settings.COMFORT_BAUDRATE = 115200
 
+def enable_passthrough_mode():
+    global mqttc
 
-def start_passthrough_mode():
     settings.PASSTHROUGH_ACTIVE = True
-    logger.warning("Entering Comfort passthrough mode")
+    try:
+        mqttc.publish(settings.DOMAIN + "/passthrough/state", "ON", retain=True)
+    except Exception:
+        pass
+
+    logger.warning("Manual Comfigurator mode enabled")
 
     try:
         if mqttc is not None and mqttc.serial is not None:
-            logger.warning("Closing Comfort serial port for passthrough")
+            logger.warning("Closing Comfort serial port for Comfigurator mode")
 
             mqttc.serial_running = False
-            time.sleep(1)  # Short wait to ensure any ongoing serial operations are completed   
+            time.sleep(1.0)
 
             if mqttc.serial is not None and mqttc.serial.is_open:
                 mqttc.serial.close()
 
     except Exception:
-        logger.exception("Failed to close Comfort serial for passthrough")
+        logger.exception("Failed to close Comfort serial for Comfigurator mode")
+
+
+def disable_passthrough_mode():
+    settings.PASSTHROUGH_ACTIVE = False
+    try:
+      mqttc.publish(settings.DOMAIN + "/passthrough/state", "OFF", retain=True)
+    except Exception:
+        pass
+    logger.warning("Manual Comfigurator mode disabled; returning to MQTT bridge")
+
+
+def start_passthrough_mode():
+    logger.warning("Comfigurator TCP client connected")
 
 
 def stop_passthrough_mode():
-    settings.PASSTHROUGH_ACTIVE = False
-    logger.warning("Leaving Comfort passthrough mode")
+    logger.warning("Comfigurator TCP client disconnected; staying in passthrough mode")
 
 passthrough_server = None
 
@@ -428,6 +446,10 @@ class Comfort2(mqtt.Client):
             time.sleep(0.25)    # Short wait for MQTT to be ready to accept commands.
 
             # You need to subscribe to your own topics to enable publish messages activating Comfort entities.
+
+            self.subscribe(f"{settings.DOMAIN}/passthrough/set")
+            logger.info("Subscribed to passthrough control topic: %s", f"{settings.DOMAIN}/passthrough/set")
+
             self.subscribe(settings.ALARMCOMMANDTOPIC)
             self.subscribe(settings.REFRESHTOPIC)
             self.subscribe(settings.RELOADTOPIC, qos=1)
@@ -436,7 +458,8 @@ class Comfort2(mqtt.Client):
             self.subscribe("homeassistant/status")      # Track Status changes for Home Assistant via MQTT Broker.
 
             self.subscribe(settings.ALARMLOGCLEARTOPIC)
-
+            
+            logger.info("Subscribed to passthrough control topic: %s", f"{settings.DOMAIN}/passthrough/set")
 
             for i in range(1, ALARMNUMBEROFOUTPUTS + 1):
                 self.subscribe(settings.ALARMOUTPUTCOMMANDTOPIC % i)
@@ -738,6 +761,19 @@ class Comfort2(mqtt.Client):
 
             self.queue_sensor_update(sensor, state)
  
+        elif msg.topic == settings.DOMAIN + "/passthrough/set":
+            cmd = msgstr.strip().upper()
+
+            if cmd == "ON":
+                enable_passthrough_mode()
+
+            elif cmd == "OFF":
+                disable_passthrough_mode()
+
+            else:
+                logger.warning("Unknown passthrough command: %s", msgstr)
+
+            return
   
     def queue_counter_update(self, counter: int, value: int) -> None:
         """Queue a counter write and debounce rapid updates."""

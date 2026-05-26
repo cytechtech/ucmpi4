@@ -103,6 +103,45 @@ app = Flask(__name__)
 DOMAIN = settings.DOMAIN
 RELOAD_TOPIC = f"{DOMAIN}/reload"
 
+PASSTHROUGH_TOPIC = f"{DOMAIN}/passthrough/set"
+PASSTHROUGH_STATE_FILE = DATA_DIR / "passthrough_mode.json"
+
+
+def _get_passthrough_mode() -> bool:
+    try:
+        if PASSTHROUGH_STATE_FILE.exists():
+            state = json.loads(
+                PASSTHROUGH_STATE_FILE.read_text(encoding="utf-8")
+            )
+            return state.get("active", False)
+    except Exception:
+        logger.exception("Failed reading passthrough state")
+
+    return False
+
+
+def _set_passthrough_mode(active: bool) -> None:
+    PASSTHROUGH_STATE_FILE.write_text(
+        json.dumps({"active": active}),
+        encoding="utf-8"
+    )
+
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+
+    if MQTT_USER:
+        c.username_pw_set(MQTT_USER, MQTT_PASS or "")
+
+    c.connect(MQTT_HOST, MQTT_PORT, 10)
+
+    c.publish(
+        PASSTHROUGH_TOPIC,
+        "ON" if active else "OFF",
+        qos=1,
+        retain=False,
+    )
+
+    c.disconnect()
+
 
 def mqtt_publish_reload(reason: str | None = None) -> None:
     logger.warning("MQTT reload publish requested | topic=%s | reason=%s", RELOAD_TOPIC, reason)
@@ -419,6 +458,36 @@ def home():
 </div>
 
 <div class="card">
+  <div><strong>Comfort Bridge Mode</strong></div>
+
+  <div>
+    Current mode:
+    <span class="pill">
+      {"Comfigurator Maintenance Mode" if _get_passthrough_mode() else "Normal MQTT Mode"}
+    </span>
+  </div>
+
+  <div class="warn" style="margin-top:10px;">
+    In maintenance mode, Home Assistant stops communicating with Comfort.
+    Use this while running Comfigurator.
+  </div>
+
+  <div class="row" style="margin-top:10px;">
+    <form method="post" action="./passthrough/enable" style="display:inline;">
+      <button class="btn" type="submit">
+        Enable Comfigurator Mode
+      </button>
+    </form>
+
+    <form method="post" action="./passthrough/disable" style="display:inline;">
+      <button class="btn btn-primary" type="submit">
+        Return to Normal MQTT Mode
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
   <div><strong>1) Upload CCLX</strong></div>
   <form method="post" action="./upload" enctype="multipart/form-data">
     <input type="file" name="file" accept=".cclx,.txt" required />
@@ -450,6 +519,19 @@ def home():
 </div>
 """
     return _html("Cytech Comfort Add-on", body)
+
+@app.post("/passthrough/enable")
+def enable_passthrough():
+    _set_passthrough_mode(True)
+    return redirect(url_for("home"))
+
+
+@app.post("/passthrough/disable")
+def disable_passthrough():
+    _set_passthrough_mode(False)
+    return redirect(url_for("home"))
+
+
 
 @app.post("/upload")
 def upload():

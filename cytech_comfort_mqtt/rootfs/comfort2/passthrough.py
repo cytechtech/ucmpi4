@@ -24,7 +24,7 @@ import logging
 import socket
 import threading
 import time
-
+import settings
 import serial
 
 logger = logging.getLogger(__name__)
@@ -165,11 +165,24 @@ class ComfortPassthroughServer:
         finally:
             self._server_socket = None
 
+
+
     def _handle_client(self, client):
         client.settimeout(0.05)
 
+        if not settings.PASSTHROUGH_ACTIVE:
+            logger.warning(
+                "Comfigurator TCP connection rejected because Comfigurator mode is not enabled"
+            )
+            try:
+                client.close()
+            except Exception:
+                pass
+            return
+        started = False
         if self.on_start:
             self.on_start()
+            started = True
 
         try:
             with serial.Serial(
@@ -178,12 +191,12 @@ class ComfortPassthroughServer:
                 timeout=0.05,
                 write_timeout=0.5,
             ) as ser:
-
                 logger.warning(
                     "Comfort serial passthrough active on %s at %s baud",
                     self.serial_port,
                     self.baudrate,
                 )
+
 
                 last_activity = time.time()
 
@@ -245,5 +258,5 @@ class ComfortPassthroughServer:
             except Exception:
                 pass
 
-            if self.on_stop:
+            if started and self.on_stop:
                 self.on_stop()
