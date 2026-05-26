@@ -225,9 +225,18 @@ setup_ram_logging(level=log_level)
 
 logging.getLogger().setLevel(log_level)
 
+root_logger = logging.getLogger()
+root_logger.setLevel(log_level)
+
+for handler in root_logger.handlers:
+    handler.setLevel(log_level)
+
 logger = logging.getLogger("bridge")
 logger.setLevel(log_level)
 logger.propagate = True
+
+for handler in logger.handlers:
+    handler.setLevel(log_level)
 
 logger.info("Comfort MQTT Bridge now using log verbosity %s", settings.LOG_VERBOSITY)
 logger.debug("DEBUG logging is enabled for bridge.py")
