@@ -1,6 +1,6 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.2-dev22"
+version: "1.0.2-dev23"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
@@ -15,7 +15,7 @@ codenotary: notary@home-assistant.io
 url: "https://github.com/cytechtech/ucmpi4"
 hassio_api: true
 uart: true
-
+host_network: true
 devices:
   - /dev/ttyS0:/dev/ttyS0
 
@@ -35,12 +35,6 @@ services:
 map:
   - addon_config
 
-ports:
-  1001/tcp: null
-
-ports_description:
-  1001/tcp: Comfort Comfigurator passthrough
-
 options:
   comfort_serial_mode: UCMA/Pi
   mqtt_broker_address: core-mosquitto
@@ -52,7 +46,7 @@ options:
   comfort_battery_update: 1
   log_verbosity: INFO
   alarm_inputs: 8
-  alarm_outputs: 0
+  alarm_outputs: 8
   flag_count: 8
   counter_count: 8
   timer_count: 8
