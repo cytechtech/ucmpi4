@@ -55,7 +55,7 @@ from options import load_options, get_str, get_int, get_bool
 import comfort_protocol
 from passthrough import ComfortPassthroughServer
 
-
+mqttc = None
 
 def is_ipv4_address(address):
     try:
@@ -103,28 +103,41 @@ def start_passthrough_mode():
     settings.PASSTHROUGH_ACTIVE = True
     logger.warning("Entering Comfort passthrough mode")
 
+    try:
+        if mqttc is not None and mqttc.serial is not None:
+            logger.warning("Closing Comfort serial port for passthrough")
+
+            mqttc.serial_running = False
+            mqttc.serial.close()
+            mqttc.serial = None
+
+    except Exception:
+        logger.exception("Failed to close Comfort serial for passthrough")
+
 
 def stop_passthrough_mode():
     settings.PASSTHROUGH_ACTIVE = False
     logger.warning("Leaving Comfort passthrough mode")
 
-
 passthrough_server = None
 
-passthrough_server = ComfortPassthroughServer(
-    port=settings.PASSTHROUGH_PORT,
-    serial_port="/dev/serial0",
-    baudrate=settings.COMFORT_BAUDRATE,
-    on_start=start_passthrough_mode,
-    on_stop=stop_passthrough_mode,
-)
+if settings.PASSTHROUGH_ENABLED:
+    passthrough_server = ComfortPassthroughServer(
+        port=settings.PASSTHROUGH_PORT,
+        serial_port="/dev/serial0",
+        baudrate=settings.COMFORT_BAUDRATE,
+        on_start=start_passthrough_mode,
+        on_stop=stop_passthrough_mode,
+    )
 
-if passthrough_server:
     passthrough_server.start()
+
     logger.info(
         "Comfort Passthrough Server enabled on TCP port %s",
         settings.PASSTHROUGH_PORT,
     )
+else:
+    logger.info("Comfort Passthrough Server disabled")
    
     
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
@@ -2617,7 +2630,7 @@ class Comfort2(mqtt.Client):
             self.will_set(settings.ALARMLWTTOPIC, payload="Offline", qos=2, retain=True)
 
         self.loop_start()
-        settings.PASSTHROUGH_ACTIVE = True
+        
         try:
             while settings.RUN:
 
@@ -3325,7 +3338,7 @@ mqttc = Comfort2(callback_api_version = mqtt.CallbackAPIVersion.VERSION2, client
 
 def main():
     global ACTIVE_CLIENT
-
+    global mqttc
     MQTT_VERSION = mqtt.MQTTv5
 
     mqttc = Comfort2(
