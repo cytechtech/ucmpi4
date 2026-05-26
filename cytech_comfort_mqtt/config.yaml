@@ -1,6 +1,6 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.2-dev13"
+version: "1.0.2-dev14"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
@@ -60,7 +60,7 @@ options:
   alarm_responses: 0
   comfort_time: false
   passthrough_enabled: true
-  passthrough_port: 1001
+
 
 schema:
   comfort_serial_mode: list(UCMA/Pi|CM4Pi on CM9001)
@@ -81,4 +81,3 @@ schema:
   alarm_responses: int(0,1024)?
   comfort_time: bool?
   passthrough_enabled: bool
-  passthrough_port: port

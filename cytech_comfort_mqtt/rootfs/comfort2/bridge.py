@@ -106,13 +106,14 @@ if settings.PASSTHROUGH_ENABLED:
         serial_port="/dev/serial0",
         baudrate=settings.COMFORT_BAUDRATE,
     )
-
-    logger.info(
-        "Passthrough server configured on TCP port %s",
-        settings.PASSTHROUGH_PORT,
-    )
-
-
+    if passthrough_server:
+        passthrough_server.start()
+        logger.info(
+            "Comfort Passthrough Server enabled on TCP port %s",
+            settings.PASSTHROUGH_PORT,
+        )
+   
+    
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
 settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
@@ -188,6 +189,8 @@ settings.LOG_VERBOSITY = get_str(_opts, "log_verbosity", "INFO").upper()
 
 if settings.LOG_VERBOSITY not in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]:
     settings.LOG_VERBOSITY = "INFO"
+
+logger.info("Comfort MQTT Bridge now using log verbosity %s", settings.LOG_VERBOSITY)
 
 setup_ram_logging(
     level=getattr(logging, settings.LOG_VERBOSITY, logging.INFO)
