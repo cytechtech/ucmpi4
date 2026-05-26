@@ -34,7 +34,7 @@ from argparse import ArgumentParser
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
-from queue import Queue, Empty
+from queue import Queue, Empty, Full
 
 # Configure logging before importing project modules
 from logging_config import setup_ram_logging
@@ -108,7 +108,7 @@ def start_passthrough_mode():
             logger.warning("Closing Comfort serial port for passthrough")
 
             mqttc.serial_running = False
-            time.sleep(0.2)
+            time.sleep(1)  # Short wait to ensure any ongoing serial operations are completed   
 
             if mqttc.serial is not None and mqttc.serial.is_open:
                 mqttc.serial.close()
@@ -213,20 +213,24 @@ if settings.UI_SENSOR_COUNT > settings.MAX_SENSORS:
 
 
 # Logging
+
 settings.LOG_VERBOSITY = get_str(_opts, "log_verbosity", "INFO").upper()
 
 if settings.LOG_VERBOSITY not in ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"]:
     settings.LOG_VERBOSITY = "INFO"
 
-logger.info("Comfort MQTT Bridge now using log verbosity %s", settings.LOG_VERBOSITY)
+log_level = getattr(logging, settings.LOG_VERBOSITY, logging.INFO)
 
-setup_ram_logging(
-    level=getattr(logging, settings.LOG_VERBOSITY, logging.INFO)
-)
+setup_ram_logging(level=log_level)
+
+logging.getLogger().setLevel(log_level)
 
 logger = logging.getLogger("bridge")
+logger.setLevel(log_level)
+logger.propagate = True
 
-logger.debug("RAM logging initialised at %s", settings.LOG_VERBOSITY)
+logger.info("Comfort MQTT Bridge now using log verbosity %s", settings.LOG_VERBOSITY)
+logger.debug("DEBUG logging is enabled for bridge.py")
 
 logger.debug("Completed importing addon configuration options")
 logger.info(
@@ -2721,20 +2725,19 @@ class Comfort2(mqtt.Client):
     def serial_reader(self):
 
         while self.serial_running:
-
-            if settings.PASSTHROUGH_ACTIVE:
-                logger.info("Serial reader stopping for passthrough")
-                break
-
-            if self.serial is None:
-                logger.info("Serial reader stopping because serial is None")
-                break
-
-            if not self.serial.is_open:
-                logger.info("Serial reader stopping because serial port is closed")
-                break
-
             try:
+                if settings.PASSTHROUGH_ACTIVE:
+                    logger.info("Serial reader stopping for passthrough")
+                    break
+
+                if self.serial is None:
+                    logger.info("Serial reader stopping because serial is None")
+                    break
+
+                if not self.serial.is_open:
+                    logger.info("Serial reader stopping because serial port is closed")
+                    break
+
                 raw = self.serial.read_until(b'\r')
 
                 if not raw:
@@ -2747,12 +2750,19 @@ class Comfort2(mqtt.Client):
 
                 try:
                     self.serial_queue.put_nowait(line)
-                except:
+                except Full:
                     logger.warning("Serial queue full, dropping: %r", line)
 
             except Exception as e:
-                logger.error("Serial thread error: %s", e)
-                time.sleep(1)
+                if settings.PASSTHROUGH_ACTIVE:
+                    logger.info(
+                        "Serial reader stopped during passthrough handover: %s",
+                        e,
+                    )
+                    break
+                else:
+                    logger.exception("Serial thread error")
+                    time.sleep(1)
 
     def process_serial_queue(self):
         for _ in range(100):  # optional burst limit
