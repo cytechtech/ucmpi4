@@ -98,20 +98,33 @@ if serial_mode == "CM4Pi on CM9001":
 else:
     settings.COMFORT_BAUDRATE = 115200
 
+
+def start_passthrough_mode():
+    settings.PASSTHROUGH_ACTIVE = True
+    logger.warning("Entering Comfort passthrough mode")
+
+
+def stop_passthrough_mode():
+    settings.PASSTHROUGH_ACTIVE = False
+    logger.warning("Leaving Comfort passthrough mode")
+
+
 passthrough_server = None
 
-if settings.PASSTHROUGH_ENABLED:
-    passthrough_server = ComfortPassthroughServer(
-        port=settings.PASSTHROUGH_PORT,
-        serial_port="/dev/serial0",
-        baudrate=settings.COMFORT_BAUDRATE,
+passthrough_server = ComfortPassthroughServer(
+    port=settings.PASSTHROUGH_PORT,
+    serial_port="/dev/serial0",
+    baudrate=settings.COMFORT_BAUDRATE,
+    on_start=start_passthrough_mode,
+    on_stop=stop_passthrough_mode,
+)
+
+if passthrough_server:
+    passthrough_server.start()
+    logger.info(
+        "Comfort Passthrough Server enabled on TCP port %s",
+        settings.PASSTHROUGH_PORT,
     )
-    if passthrough_server:
-        passthrough_server.start()
-        logger.info(
-            "Comfort Passthrough Server enabled on TCP port %s",
-            settings.PASSTHROUGH_PORT,
-        )
    
     
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
@@ -285,6 +298,7 @@ def validate_port(_port, min=1, max=65535):
 
 # Send all alarm related data to HA so it can be shown in the UX as a live log of events.
 # This is for debugging and also to see the history of events leading up to an alarm.
+
 
 class RollingMqttLog:
     def __init__(self, mqtt_client, topic, max_lines=80, ts_format="%H:%M:%S"):
@@ -2603,9 +2617,14 @@ class Comfort2(mqtt.Client):
             self.will_set(settings.ALARMLWTTOPIC, payload="Offline", qos=2, retain=True)
 
         self.loop_start()
-
+        settings.PASSTHROUGH_ACTIVE = True
         try:
             while settings.RUN:
+
+                # If passthrough mode is active, skip serial connection and just keep the MQTT loop running
+                if settings.PASSTHROUGH_ACTIVE:
+                    time.sleep(0.5)
+                    continue
 
                 self.serial = None
 
