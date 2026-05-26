@@ -1,6 +1,6 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.2-dev21"
+version: "1.0.2-dev22"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
@@ -36,7 +36,7 @@ map:
   - addon_config
 
 ports:
-  1001/tcp: 1001
+  1001/tcp: null
 
 ports_description:
   1001/tcp: Comfort Comfigurator passthrough
