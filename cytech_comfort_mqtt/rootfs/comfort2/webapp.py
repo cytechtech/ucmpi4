@@ -428,15 +428,7 @@ def home():
 
     mode_text = "Comfigurator Maintenance Mode" if _get_passthrough_mode() else "Normal MQTT Mode"
 
-    body = f"""{banner_html}
-
-<div class="card">
-  <div><strong>Cytech Comfort Add-on</strong></div>
-  <div class="row" style="margin-top:10px;">
-    <a class="btn btn-primary" href="{url_for('home')}">Main</a>
-    <a class="btn" href="{url_for('view_log')}">Logs</a>
-  </div>
-</div>
+    body = f"""
 
 <div class="card" style="border-color:#333;">
   <div><strong>1) Comfort Bridge Mode</strong></div>
@@ -475,6 +467,8 @@ def home():
     Use this section to upload, validate and apply a Comfort CCLX file.
   </div>
 </div>
+
+{banner_html}
 
 <div class="card">
   <div><strong>CCLX Status</strong></div>
@@ -737,7 +731,7 @@ def view_log():
 <div class="card">
   <div><strong>Cytech Comfort Add-on</strong></div>
   <div class="row" style="margin-top:10px;">
-    <a class="btn" href="{url_for('home')}">CCLX File</a>
+    <a class="btn" href="{url_for('home')}">Main</a>
     <a class="btn btn-primary" href="{url_for('view_log')}">Logs</a>
   </div>
 </div>
