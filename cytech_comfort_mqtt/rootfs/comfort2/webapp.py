@@ -78,7 +78,7 @@ MQTT_PORT = get_int(_opts, "mqtt_broker_port", 1883)
 MQTT_USER = get_str(_opts, "mqtt_user", None)
 MQTT_PASS = get_str(_opts, "mqtt_password", None)
 
-logger.warning(
+logger.debug(
     "WebUI MQTT config | host=%s port=%s user=%r pass_set=%s",
     MQTT_HOST, MQTT_PORT, MQTT_USER, bool(MQTT_PASS)
 )
@@ -117,14 +117,14 @@ def mqtt_publish_reload(reason: str | None = None) -> None:
     def _on_connect(client, userdata, flags, reason_code, properties):
         # reason_code is a ReasonCode object in callback API v2
         rc_val = getattr(reason_code, "value", reason_code)
-        logger.warning("MQTT on_connect reason_code=%s (value=%s)", reason_code, rc_val)
+        logger.debug("MQTT on_connect reason_code=%s (value=%s)", reason_code, rc_val)
         conn_rc["rc"] = rc_val
         if rc_val == 0:
             connected.set()
 
     def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
         rc_val = getattr(reason_code, "value", reason_code)
-        logger.warning("MQTT on_disconnect reason_code=%s (value=%s) flags=%s", reason_code, rc_val, disconnect_flags)
+        logger.debug("MQTT on_disconnect reason_code=%s (value=%s) flags=%s", reason_code, rc_val, disconnect_flags)
 
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     c.on_connect = _on_connect
@@ -132,13 +132,13 @@ def mqtt_publish_reload(reason: str | None = None) -> None:
 
     if MQTT_USER:
         c.username_pw_set(MQTT_USER, MQTT_PASS or "")
-        logger.warning("MQTT auth configured (username provided)")
+        logger.debug("MQTT auth configured (username provided)")
     else:
-        logger.warning("MQTT auth not configured")
+        logger.debug("MQTT auth not configured")
 
     c.loop_start()
     try:
-        logger.warning("Connecting to MQTT broker...")
+        logger.debug("Connecting to MQTT broker...")
         c.connect_async(MQTT_HOST, MQTT_PORT, keepalive=10)
 
         if not connected.wait(timeout=10.0):
@@ -148,11 +148,11 @@ def mqtt_publish_reload(reason: str | None = None) -> None:
             raise RuntimeError(f"MQTT connect refused reason_code={conn_rc['rc']}")
 
         payload = {"reason": reason or "webui"}
-        logger.warning("Publishing payload: %s", payload)
+        logger.debug("Publishing payload: %s", payload)
         info = c.publish(RELOAD_TOPIC, json.dumps(payload), qos=1, retain=False)
 
         info.wait_for_publish(timeout=5.0)
-        logger.warning(
+        logger.debug(
             "Publish result | rc=%s | mid=%s | is_published=%s",
             info.rc, getattr(info, "mid", None), info.is_published()
         )
@@ -466,7 +466,7 @@ def upload():
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
         tmp_path = UPLOAD_CCLX.with_suffix(".cclx.uploading")
-        app.logger.warning("UPLOAD: saving '%s' -> tmp=%s final=%s",
+        app.logger.debug("UPLOAD: saving '%s' -> tmp=%s final=%s",
                            f.filename, str(tmp_path), str(UPLOAD_CCLX))
         if tmp_path.exists():
             tmp_path.unlink()
@@ -476,7 +476,7 @@ def upload():
 
         # Verify
         st = UPLOAD_CCLX.stat()
-        app.logger.warning("UPLOAD: saved OK path=%s size=%d bytes", str(UPLOAD_CCLX), st.st_size)
+        app.logger.debug("UPLOAD: saved OK path=%s size=%d bytes", str(UPLOAD_CCLX), st.st_size)
 
         if st.st_size == 0:
             raise RuntimeError("Saved file is 0 bytes (empty upload)")
@@ -493,7 +493,7 @@ def upload():
         UPLOAD_META.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
         # Redirect back with a one-time success banner
-        
+        app.logger.debug("UPLOAD: redirecting to home with notice=uploaded")
         return redirect(url_for(
             'home',
             notice="uploaded",
@@ -673,7 +673,7 @@ def download_log():
 @app.post("/log/clear")
 def clear_log():
     RAM_LOG_FILE.write_text("", encoding="utf-8")
-    logger.warning("RAM log cleared from Web UI")
+    logger.debug("RAM log cleared from Web UI")
     return redirect(url_for("view_log"))  
 
 if __name__ == "__main__":

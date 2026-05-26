@@ -53,6 +53,7 @@ import settings
 from cclx_parser import parse_cclx
 from options import load_options, get_str, get_int, get_bool
 import comfort_protocol
+from passthrough import ComfortPassthroughServer
 
 
 
@@ -104,6 +105,8 @@ settings.MQTTPASSWORD = get_str(_opts, "mqtt_password", None)
 settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
 # Optional resolved broker IP for diagnostics
 settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
+settings.PASSTHROUGH_ENABLED = get_bool(_opts, "passthrough_enabled", True)
+settings.PASSTHROUGH_PORT = get_int(_opts, "passthrough_port", 1001)
 
 # Comfort
 settings.COMFORT_LOGIN_ID = get_str(_opts, "comfort_login_id", "")
@@ -2007,7 +2010,6 @@ class Comfort2(mqtt.Client):
             return
 
         for i in range(1, max_outputs + 1):
-
 
             props_str = settings.output_properties.get(str(i))
             props_int = settings.output_properties.get(i)

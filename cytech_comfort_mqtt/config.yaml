@@ -1,6 +1,6 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.2-dev11"
+version: "1.0.2-dev12"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
@@ -35,6 +35,12 @@ services:
 map:
   - addon_config
 
+ports:
+  1001/tcp: 1001
+
+ports_description:
+  1001/tcp: Comfort Comfigurator passthrough
+
 options:
   comfort_serial_mode: UCMA/Pi
   mqtt_broker_address: core-mosquitto
@@ -53,7 +59,8 @@ options:
   sensor_count: 8
   alarm_responses: 0
   comfort_time: false
-
+  passthrough_enabled: true
+  passthrough_port: 1001
 
 schema:
   comfort_serial_mode: list(UCMA/Pi|CM4Pi on CM9001)
@@ -73,3 +80,5 @@ schema:
   sensor_count: list(0|8|16|24|32|40|48|56|64)?
   alarm_responses: int(0,1024)?
   comfort_time: bool?
+  passthrough_enabled: bool
+  passthrough_port: port
