@@ -482,7 +482,7 @@ def home():
 
 {banner_html}
 
-<div class="card">
+<div class="card" id="cclx-status">
   <div><strong>CCLX Status</strong></div>
   <div>Time: <span class="pill">{_now()}</span></div>
   <div>Active CCLX: {"<span class='ok'>present</span>" if ACTIVE_CCLX.exists() else "<span class='warn'>missing</span>"}</div>
@@ -699,18 +699,7 @@ def apply():
             f"<p class='err'>Apply failed (rolled back): {type(e).__name__}: {e}</p><p><a href='{url_for('home')}'>Back</a></p>"
         ), 500
 
-    return _html(
-        "Apply complete",
-        f"""
-        <p class='ok'>Applied successfully at {_now()}.</p>
-
-        <p>
-          <a href='{url_for("home")}#apply-cclx'>
-            Back to Apply section
-          </a>
-        </p>
-        """
-    )
+    return redirect(url_for("home") + "#cclx-status")
 
 
 @app.post("/rollback")
