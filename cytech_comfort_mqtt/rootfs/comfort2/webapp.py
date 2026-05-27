@@ -649,7 +649,7 @@ def validate():
     if not UPLOAD_CCLX.exists():
         return _html("Validate", f"<p class='err'>No uploaded CCLX staged. Upload first.</p><p><a href='{url_for('home')}'>Back</a></p>"), 400
 
-    ok, msg = _try_parse_cclx(UPLOAD_CCLX)
+    ok, msg, summary = _try_parse_cclx(UPLOAD_CCLX)
     if not ok:
        return _html("Validate", f"<p class='err'>Validation failed: {msg}</p><p><a href='{url_for('home')}'>Back</a></p>"), 400
 
@@ -675,7 +675,7 @@ def apply():
 
     with ApplyLock(LOCK_FILE):
         # Validate again just before applying
-        ok, msg = _try_parse_cclx(UPLOAD_CCLX)
+        ok, msg, summary = _try_parse_cclx(UPLOAD_CCLX)
         if not ok:
             return _html("Apply", f"<p class='err'>Validation failed: {msg}</p><p><a href='{url_for('home')}'>Back</a></p>"), 400
 
