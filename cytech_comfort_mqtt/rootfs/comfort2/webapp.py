@@ -600,15 +600,16 @@ def upload():
 
         # Redirect back with a one-time success banner
         app.logger.debug("UPLOAD: redirecting to home with notice=uploaded")
-        return redirect(url_for(
-            'home',
-            notice="uploaded",
-            name=meta["original_filename"],
-            size=str(meta["size_bytes"]),
-            when=meta["uploaded_at"],
-            sha=meta["sha256"],
-        )) + "#validate-cclx"
-    
+        return redirect(
+            url_for(
+                "home",
+                notice="uploaded",
+                name=meta["original_filename"],
+                size=str(meta["size_bytes"]),
+                when=meta["uploaded_at"],
+                sha=meta["sha256"],
+            ) + "#validate-cclx"
+        )     
  
     except Exception as e:
         msg = escape(str(e))
