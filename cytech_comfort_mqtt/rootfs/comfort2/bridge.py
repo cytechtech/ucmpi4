@@ -172,6 +172,7 @@ settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
 settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
 settings.PASSTHROUGH_ENABLED = get_bool(_opts, "passthrough_enabled", True)
 settings.PASSTHROUGH_PORT = get_int(_opts, "passthrough_port", 1001)
+settings.PASSTHROUGH_ENABLED = get_bool(_opts, "passthrough_enabled", False)
 
 # Comfort
 settings.COMFORT_LOGIN_ID = get_str(_opts, "comfort_login_id", "")

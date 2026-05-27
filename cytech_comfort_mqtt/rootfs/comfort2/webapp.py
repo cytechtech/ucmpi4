@@ -426,21 +426,27 @@ def home():
 </div>
 """
 
-    mode_text = "Comfigurator Maintenance Mode" if _get_passthrough_mode() else "Normal MQTT Mode"
+    passthrough_html = ""
 
-    body = f"""
+    if settings.PASSTHROUGH_ENABLED:
+        mode_text = (
+            "Comfigurator Maintenance Mode"
+            if _get_passthrough_mode()
+            else "Normal MQTT Mode"
+        )
 
+        passthrough_html = f"""
 <div class="card" style="border-color:#333;">
   <div><strong>1) Comfort Bridge Mode</strong></div>
   <div style="margin-top:8px;">
     Current mode: <span class="pill">{mode_text}</span>
   </div>
 
-<div class="warn" style="margin-top:10px;">
-  <div>In Comfigurator Maintenance Mode, Home Assistant stops communicating with Comfort.</div>
-  <div>Connect Comfigurator to Comfort using the Home Assistant IP address on port 10001.</div>
-  <div>Return to Normal MQTT Mode when finished.</div>
-</div>
+  <div class="warn" style="margin-top:10px;">
+    <div>In Comfigurator Maintenance Mode, Home Assistant stops communicating with Comfort.</div>
+    <div>Connect Comfigurator to Comfort using the Home Assistant IP address on port 10001.</div>
+    <div>Return to Normal MQTT Mode when finished.</div>
+  </div>
 
   <div class="row" style="margin-top:12px;">
     <form method="post" action="./passthrough/enable" style="display:inline;">
@@ -452,9 +458,13 @@ def home():
     </form>
   </div>
 </div>
+"""
+
+    body = f"""
+{passthrough_html}
 
 <div class="card">
-  <div><strong>2) Logs</strong></div>
+  <div><strong>Logs</strong></div>
   <div>View the live RAM log for bridge, web UI and passthrough activity.</div>
   <div class="row" style="margin-top:10px;">
     <a class="btn btn-primary" href="{url_for('view_log')}">Open Logs</a>

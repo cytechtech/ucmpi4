@@ -27,7 +27,7 @@ from datetime import timedelta
 logger = logging.getLogger(__name__)
 
 # Comfort Comfigurator TCP passthrough
-PASSTHROUGH_ENABLED = True
+PASSTHROUGH_ENABLED = False
 PASSTHROUGH_PORT = 10001
 PASSTHROUGH_ACTIVE = False
 
