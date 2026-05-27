@@ -1,6 +1,6 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.2-dev31"
+version: "1.0.2-dev32"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
@@ -53,7 +53,7 @@ options:
   sensor_count: 8
   alarm_responses: 0
   comfort_time: false
-  passthrough_enabled: true
+  passthrough_enabled: false
 
 
 schema:

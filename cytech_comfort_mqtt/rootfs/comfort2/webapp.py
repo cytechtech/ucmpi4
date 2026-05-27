@@ -51,7 +51,7 @@ from flask import url_for as flask_url_for
 from markupsafe import escape
 
 # Project imports
-from options import load_options, get_str, get_int
+from options import load_options, get_str, get_int, get_bool
 
 _opts = load_options()
 
@@ -105,6 +105,7 @@ RELOAD_TOPIC = f"{DOMAIN}/reload"
 
 PASSTHROUGH_TOPIC = f"{DOMAIN}/passthrough/set"
 PASSTHROUGH_STATE_FILE = DATA_DIR / "passthrough_mode.json"
+passthrough_enabled = get_bool(_opts, "passthrough_enabled", False)
 
 
 def _get_passthrough_mode() -> bool:
@@ -428,7 +429,7 @@ def home():
 
     passthrough_html = ""
 
-    if settings.PASSTHROUGH_ENABLED:
+    if passthrough_enabled:
         mode_text = (
             "Comfigurator Maintenance Mode"
             if _get_passthrough_mode()
