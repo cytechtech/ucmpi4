@@ -172,7 +172,6 @@ settings.MQTTPASSWORD = get_str(_opts, "mqtt_password", None)
 settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
 # Optional resolved broker IP for diagnostics
 settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
-settings.PASSTHROUGH_ENABLED = get_bool(_opts, "passthrough_enabled", True)
 
 
 # Comfort
@@ -499,6 +498,17 @@ class Comfort2(mqtt.Client):
                 logger.debug("Subscribed to %d Responses", ALARMNUMBEROFRESPONSES)
             else:
                 logger.debug("Not Subscribed to any Responses")
+
+            active_cclx = Path("/data/site.cclx")
+
+            if active_cclx.exists():
+                logger.info("BOOT: loading active CCLX from %s", active_cclx)
+                self.add_descriptions(active_cclx)
+
+                logger.info("BOOT: publishing discovery from active CCLX")
+                self._handle_reload_request(source="startup", reason="boot")
+            else:
+                logger.warning("BOOT: no active CCLX found at %s", active_cclx)
 
             if settings.FIRST_LOGIN == True:
                 logger.debug("Synchronizing Comfort Data...")
