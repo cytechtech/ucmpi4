@@ -436,11 +436,11 @@ def home():
     Current mode: <span class="pill">{mode_text}</span>
   </div>
 
-  <div class="warn" style="margin-top:10px;">
-    In Comfigurator Maintenance Mode, Home Assistant stops communicating with Comfort.
-    You can then connect Comfigurator to Comfort using the Home Assistant IP address on port 10001.
-    Return to Normal MQTT Mode when finished.
-  </div>
+<div class="warn" style="margin-top:10px;">
+  In Comfigurator Maintenance Mode, Home Assistant stops communicating with Comfort.<br>
+  Connect Comfigurator to Comfort using the Home Assistant IP address on port 10001.<br>
+  Return to Normal MQTT Mode when finished.
+</div>
 
   <div class="row" style="margin-top:12px;">
     <form method="post" action="./passthrough/enable" style="display:inline;">
