@@ -739,6 +739,8 @@ def view_log():
     text = RAM_LOG_FILE.read_text(encoding="utf-8", errors="replace")
     safe_text = html.escape(text[-200000:])
 
+    actual_bytes = len(safe_text.encode("utf-8"))
+
     body = f"""
 <div class="card">
   <div><strong>Cytech Comfort Add-on</strong></div>
@@ -751,7 +753,12 @@ def view_log():
 <div class="card">
   <div><strong>RAM log file</strong></div>
   <div>Path: <code>{RAM_LOG_FILE}</code></div>
-  <div>Showing last <code>200 KB</code>.</div>
+  <div>
+  Showing <code>{actual_bytes}</code> bytes
+  (maximum view: 200 KB).
+</div>
+  
+
 
   <div class="row" style="margin-top:10px;">
     <button class="btn btn-primary" type="button" onclick="refreshLog()">Refresh</button>

@@ -142,6 +142,8 @@ def stop_passthrough_mode():
     else:
         logger.warning("Comfigurator TCP client disconnected; MQTT bridge mode is active")
 
+settings.PASSTHROUGH_PORT = get_int(_opts, "passthrough_port", 10001)
+settings.PASSTHROUGH_ENABLED = get_bool(_opts, "passthrough_enabled", False)
 passthrough_server = None
 
 if settings.PASSTHROUGH_ENABLED:
@@ -171,8 +173,7 @@ settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
 # Optional resolved broker IP for diagnostics
 settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
 settings.PASSTHROUGH_ENABLED = get_bool(_opts, "passthrough_enabled", True)
-settings.PASSTHROUGH_PORT = get_int(_opts, "passthrough_port", 1001)
-settings.PASSTHROUGH_ENABLED = get_bool(_opts, "passthrough_enabled", False)
+
 
 # Comfort
 settings.COMFORT_LOGIN_ID = get_str(_opts, "comfort_login_id", "")
