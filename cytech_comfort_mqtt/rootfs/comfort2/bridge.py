@@ -463,7 +463,6 @@ class Comfort2(mqtt.Client):
 
             self.subscribe(settings.ALARMLOGCLEARTOPIC)
             
-            logger.info("Subscribed to passthrough control topic: %s", f"{settings.DOMAIN}/passthrough/set")
 
             for i in range(1, ALARMNUMBEROFOUTPUTS + 1):
                 self.subscribe(settings.ALARMOUTPUTCOMMANDTOPIC % i)
