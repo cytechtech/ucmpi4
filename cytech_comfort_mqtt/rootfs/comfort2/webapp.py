@@ -516,14 +516,15 @@ def home():
   </form>
 </div>
 
-<div class="card">
+
+<div class="card" id="validate-cclx">
   <div><strong>Validate uploaded CCLX</strong></div>
   <form method="post" action="./validate" style="margin-top:10px;">
     <button class="btn" type="submit">Validate</button>
   </form>
 </div>
 
-<div class="card">
+<div class="card" id="apply-cclx">
   <div><strong>Apply CCLX</strong></div>
   <div class="warn">
     This will clear old MQTT discovery entities and recreate them from the uploaded CCLX.
@@ -606,7 +607,8 @@ def upload():
             size=str(meta["size_bytes"]),
             when=meta["uploaded_at"],
             sha=meta["sha256"],
-        ))
+        )) + "#validate-cclx"
+    
  
     except Exception as e:
         msg = escape(str(e))
@@ -647,15 +649,24 @@ def validate():
     if not UPLOAD_CCLX.exists():
         return _html("Validate", f"<p class='err'>No uploaded CCLX staged. Upload first.</p><p><a href='{url_for('home')}'>Back</a></p>"), 400
 
-    ok, msg, summary = _try_parse_cclx(UPLOAD_CCLX)
+    ok, msg = _try_parse_cclx(UPLOAD_CCLX)
     if not ok:
-        return _html("Validate", f"<p class='err'>Validation failed: {msg}</p><p><a href='{url_for('home')}'>Back</a></p>"), 400
+       return _html("Validate", f"<p class='err'>Validation failed: {msg}</p><p><a href='{url_for('home')}'>Back</a></p>"), 400
 
-    pretty = json.dumps(summary, indent=2)
+    
     return _html(
         "Validate",
-        f"<p class='ok'>Validation OK: {msg}</p><div class='card'><pre>{pretty}</pre></div><p><a href='{url_for('home')}'>Back</a></p>"
+        f"""
+        <p class='ok'>Validation OK: {msg}</p>
+
+        <p>
+        <a href='{url_for("home")}#apply-cclx'>
+            Continue to Apply
+        </a>
+        </p>
+        """
     )
+
 
 @app.post("/apply")
 def apply():
@@ -664,7 +675,7 @@ def apply():
 
     with ApplyLock(LOCK_FILE):
         # Validate again just before applying
-        ok, msg, summary = _try_parse_cclx(UPLOAD_CCLX)
+        ok, msg = _try_parse_cclx(UPLOAD_CCLX)
         if not ok:
             return _html("Apply", f"<p class='err'>Validation failed: {msg}</p><p><a href='{url_for('home')}'>Back</a></p>"), 400
 
@@ -688,14 +699,18 @@ def apply():
             f"<p class='err'>Apply failed (rolled back): {type(e).__name__}: {e}</p><p><a href='{url_for('home')}'>Back</a></p>"
         ), 500
 
-    pretty = json.dumps(summary, indent=2)
     return _html(
         "Apply complete",
-        f"<p class='ok'>Applied successfully at {_now()}.</p>"
-        f"<div class='card'><div><strong>Summary</strong></div><pre>{pretty}</pre></div>"
-        f"<p><a href='{url_for('home')}'>Back</a></p>"
-    )
+        f"""
+        <p class='ok'>Applied successfully at {_now()}.</p>
 
+        <p>
+          <a href='{url_for("home")}#apply-cclx'>
+            Back to Apply section
+          </a>
+        </p>
+        """
+    )
 
 
 @app.post("/rollback")
