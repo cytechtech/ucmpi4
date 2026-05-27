@@ -480,7 +480,6 @@ def home():
   </div>
 </div>
 
-{banner_html}
 
 <div class="card" id="cclx-status">
   <div><strong>CCLX Status</strong></div>
@@ -516,7 +515,7 @@ def home():
   </form>
 </div>
 
-
+{banner_html}
 <div class="card" id="validate-cclx">
   <div><strong>Validate uploaded CCLX</strong></div>
   <form method="post" action="./validate" style="margin-top:10px;">
