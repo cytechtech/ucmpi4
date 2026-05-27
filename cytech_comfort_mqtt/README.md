@@ -32,4 +32,4 @@ The following objects are supported:
 
 ⚠️ This Add-on was specifically developed for Home Assistant OS. Home Assistant Container and Core have not been tested and is not supported at present.
 
-Copyright 2026 Cytech Technology Pte Ltd. Licensed under Apache-2.0. For more details see the `LICENCE` file.
+Copyright 2026 Cytech Technology Pte Ltd. Licensed under Apache-2.0. For more details see the [LICENSE](LICENSE) file.

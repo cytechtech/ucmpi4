@@ -438,7 +438,8 @@ def home():
 
   <div class="warn" style="margin-top:10px;">
     In Comfigurator Maintenance Mode, Home Assistant stops communicating with Comfort.
-    Use this while running Comfigurator, then return to Normal MQTT Mode when finished.
+    You can then connect Comfigurator to Comfort using the Home Assistant IP address on port 10001.
+    Return to Normal MQTT Mode when finished.
   </div>
 
   <div class="row" style="margin-top:12px;">

@@ -1,3 +1,9 @@
+## [1.0.3] - 2026-05-27
+
+### Added
+- TCP to Serial bridge to allow Comfigurator access to Comfort through HA
+- RAM based logging to reduce SD Card writes
+
 ## [1.0.2] - 2026-04-21
 
 ### Added
