@@ -698,8 +698,19 @@ def apply():
             "Apply",
             f"<p class='err'>Apply failed (rolled back): {type(e).__name__}: {e}</p><p><a href='{url_for('home')}'>Back</a></p>"
         ), 500
+   
+    return _html(
+    "Apply complete",
+    f"""
+    <p class='ok'>Applied successfully at {_now()}.</p>
 
-    return redirect(url_for("home") + "#cclx-status")
+    <p>
+      <a href="{url_for('home')}#cclx-status">
+        Return to CCLX Status
+      </a>
+    </p>
+    """
+)
 
 
 @app.post("/rollback")
