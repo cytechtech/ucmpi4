@@ -72,3 +72,6 @@ configuration:
     name: Set Comfort Time and Date.
     description: >-
       Set Cytech Comfort Time and Date on successful logon and once a day at midnight (Default is False).
+  passthrough_enabled:
+    name: Enable Comfigurator Maintenance Mode
+    description: Allow direct TCP passthrough access for Comfigurator. Home Assistant communication with Comfort is suspended while enabled (Default is True).
