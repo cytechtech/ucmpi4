@@ -1,3 +1,13 @@
+## [1.0.5] - 2026-05-28
+
+### Changed
+- Changed restart to read cclx file
+
+## [1.0.4] - 2026-05-27
+
+### Changed
+- Small bug fixes
+
 ## [1.0.3] - 2026-05-27
 
 ### Added
