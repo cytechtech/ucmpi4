@@ -1,3 +1,9 @@
+## [1.0.7] - 2026-05-28
+
+### Changed
+- MQTT setup is now hardcoded
+- Delay timer added for updates to allow COmfort comms before MQTT discovery
+
 ## [1.0.6] - 2026-05-28
 
 ### Changed
