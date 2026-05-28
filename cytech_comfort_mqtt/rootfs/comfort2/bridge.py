@@ -1849,7 +1849,7 @@ class Comfort2(mqtt.Client):
     def startup_reload_when_ready(self):
         if not settings.MQTT_DEVICE_COMFORT:
             logger.warning("Startup reload delayed: MQTT_DEVICE_COMFORT not ready")
-            threading.Timer(3, self.startup_reload_when_ready).start()
+            threading.Timer(1, self.startup_reload_when_ready).start()
             return
 
         self._handle_reload_request(source="startup", reason="device-ready")
