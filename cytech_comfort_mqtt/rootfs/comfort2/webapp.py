@@ -72,11 +72,10 @@ logger.debug("Web UI RAM logging initialised at %s", log_verbosity)
 import cclx_parser
 import settings
 
-
-MQTT_HOST = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
-MQTT_PORT = get_int(_opts, "mqtt_broker_port", 1883)
-MQTT_USER = get_str(_opts, "mqtt_user", None)
-MQTT_PASS = get_str(_opts, "mqtt_password", None)
+MQTT_HOST = settings.MQTTBROKER
+MQTT_PORT = settings.MQTTPORT
+MQTT_USER = settings.MQTTUSERNAME
+MQTT_PASS = settings.MQTTPASSWORD
 
 logger.debug(
     "WebUI MQTT config | host=%s port=%s user=%r pass_set=%s",

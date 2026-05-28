@@ -165,13 +165,13 @@ else:
     logger.info("Comfort Passthrough Server disabled")
    
     
-settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
-settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
-settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
-settings.MQTTPASSWORD = get_str(_opts, "mqtt_password", None)
-settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
-# Optional resolved broker IP for diagnostics
-settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
+# settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
+# settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
+# settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
+# settings.MQTTPASSWORD = get_str(_opts, "mqtt_password", None)
+# settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
+# #Optional resolved broker IP for diagnostics
+# settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
 
 
 # Comfort
@@ -261,7 +261,6 @@ for handler in logger.handlers:
     handler.setLevel(log_level)
 
 logger.info("Comfort MQTT Bridge now using log verbosity %s", settings.LOG_VERBOSITY)
-logger.debug("DEBUG logging is enabled for bridge.py")
 
 logger.debug("Completed importing addon configuration options")
 logger.info(
@@ -275,7 +274,6 @@ logger.debug("MQTT_SERVER = %s", settings.MQTTBROKERIP)
 
 logger.debug("MQTT_PROTOCOL = %s/%s", settings.MQTTPROTOCOL, settings.MQTTPORT)
 logger.debug("COMFORT_LOGIN_ID = ******")
-#logger.debug("COMFORT_CCLX_FILE = %s", settings.COMFORT_CCLX_FILE)
 logger.debug("COMFORT_BATTERY_STATUS_ID = %s", settings.COMFORT_BATTERY_STATUS_ID)
 logger.debug("MQTT_LOG_LEVEL = %s", settings.LOG_VERBOSITY)
 logger.debug("COMFORT_TIME = %s", settings.COMFORT_TIME)
@@ -1336,10 +1334,8 @@ class Comfort2(mqtt.Client):
      
         # Store the Comfort device dict for reload/discovery republish
         settings.MQTT_DEVICE_COMFORT = MQTT_DEVICE
-
-        settings.MQTT_DEVICE_COMFORT = MQTT_DEVICE
         
-        # Publish Input discovery entities under the Comfort device  # Cytech26
+        # Publish Input discovery entities under the Comfort device  
         if not getattr(self, "_inputs_discovery_published", False):
             self.publish_input_discovery(settings.MQTT_DEVICE_COMFORT)
             self._inputs_discovery_published = True
@@ -1926,6 +1922,9 @@ class Comfort2(mqtt.Client):
                 mqtt_device_comfort = getattr(settings, "MQTT_DEVICE_COMFORT", None)
 
             if mqtt_device_comfort is not None:
+                logger.warning("RELOAD: input 1 props = %r", settings.input_properties.get("1"))
+                logger.warning("RELOAD: flag 1 props = %r", settings.flag_properties.get("1"))
+                logger.warning("RELOAD: MQTT_DEVICE_COMFORT = %r", settings.MQTT_DEVICE_COMFORT)
                 self.publish_input_discovery(mqtt_device_comfort)
                 self.publish_output_discovery(mqtt_device_comfort)
                 self.publish_flag_discovery(mqtt_device_comfort)
@@ -1936,20 +1935,6 @@ class Comfort2(mqtt.Client):
                 self.PublishBatteryVoltageStates()
             else:
                 logger.error("MQTT_DEVICE_COMFORT still missing after fallback; discovery not published")
-
-
-
-            if mqtt_device_comfort is not None:
-                self.publish_input_discovery(mqtt_device_comfort)
-                self.publish_output_discovery(mqtt_device_comfort)
-                self.publish_flag_discovery(mqtt_device_comfort)
-                self.publish_counter_discovery(mqtt_device_comfort)
-                self.publish_sensor_discovery(mqtt_device_comfort)
-                self.publish_timer_discovery(mqtt_device_comfort)
-                self.PublishBatteryVoltageDiscovery()
-                self.PublishBatteryVoltageStates()
-            else:
-              self.ensure_mqtt_device_comfort()
 
         except Exception:
             logger.exception("Reload failed source=%s reason=%r", source, reason)

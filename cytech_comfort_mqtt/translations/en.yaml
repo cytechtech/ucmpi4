@@ -6,27 +6,6 @@ configuration:
       Select the serial baud rate for the Comfort connection.
       Use 115200 for UCMA/Pi.
       Use 9600 for CM4Pi on CM9001.
-  mqtt_broker_address:
-    name: MQTT Broker Address
-    description: >-
-      The MQTT Broker Hostname or IP address in IPV4 format or use the default local Home Assistant 'core-mosquitto' broker.
-  mqtt_user:
-    name: MQTT Broker Username
-    description: >-
-      The MQTT Broker Username used for authentication.
-  mqtt_password:
-    name: MQTT Broker Password
-    description: >-
-      The MQTT Broker Password.
-  mqtt_broker_port:
-    name: MQTT Broker Port
-    description: >-
-      MQTT Broker TCP port. Range from 1024 - 65535 (Default 1883).
-      Common Port Defaults: Normal MQTT - 1883 (Unencrypted), MQTT over WebSocket - 1884 (Unencrypted), Normal MQTT with SSL - 8883 (Encrypted), MQTT over WebSocket with SSL - 8884 (Encrypted).
-  mqtt_protocol:
-    name: MQTT Transport Protocol
-    description: >-
-      Use TCP or WebSockets as transport (Default TCP).
   comfort_login_id:
     name: Comfort User Login ID
     description: >-
