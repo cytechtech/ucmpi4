@@ -504,7 +504,8 @@ class Comfort2(mqtt.Client):
                 self.add_descriptions(active_cclx)
 
                 logger.info("BOOT: publishing discovery from active CCLX")
-                self._handle_reload_request(source="startup", reason="boot")
+                #self._handle_reload_request(source="startup", reason="boot")
+                threading.Timer(3, self.startup_reload_when_ready).start()
             else:
                 logger.warning("BOOT: no active CCLX found at %s", active_cclx)
 
@@ -1844,6 +1845,14 @@ class Comfort2(mqtt.Client):
 
     #     logger.warning("PURGE outputs: done deleted=%d", deleted)
 
+
+    def startup_reload_when_ready(self):
+        if not settings.MQTT_DEVICE_COMFORT:
+            logger.warning("Startup reload delayed: MQTT_DEVICE_COMFORT not ready")
+            threading.Timer(3, self.startup_reload_when_ready).start()
+            return
+
+        self._handle_reload_request(source="startup", reason="device-ready")
 
 
 
