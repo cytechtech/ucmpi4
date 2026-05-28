@@ -1931,9 +1931,6 @@ class Comfort2(mqtt.Client):
                 mqtt_device_comfort = getattr(settings, "MQTT_DEVICE_COMFORT", None)
 
             if mqtt_device_comfort is not None:
-                logger.warning("RELOAD: input 1 props = %r", settings.input_properties.get("1"))
-                logger.warning("RELOAD: flag 1 props = %r", settings.flag_properties.get("1"))
-                logger.warning("RELOAD: MQTT_DEVICE_COMFORT = %r", settings.MQTT_DEVICE_COMFORT)
                 self.publish_input_discovery(mqtt_device_comfort)
                 self.publish_output_discovery(mqtt_device_comfort)
                 self.publish_flag_discovery(mqtt_device_comfort)
