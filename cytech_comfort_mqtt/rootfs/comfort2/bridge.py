@@ -1169,7 +1169,7 @@ class Comfort2(mqtt.Client):
             time.sleep(0.05)
             self.publish(settings.ALARMLWTTOPIC, 'Online',qos=2,retain=True)
             time.sleep(0.05)
-            self.publish(settings.ALARMMESSAGETOPIC, "",qos=2,retain=True)       # Empty string removes topic.
+            self.publish(settings.ALARMMESSAGETOPIC, None,qos=2,retain=True)       # None removes topic.
             time.sleep(0.05)
 
 
@@ -1840,7 +1840,7 @@ class Comfort2(mqtt.Client):
     #     deleted = 0
     #     for i in range(start, end + 1):
     #         topic = f"homeassistant/switch/{dom}/output{i}/config"
-    #         self.publish(topic, "", qos=1, retain=True)
+    #         self.publish(topic, None, qos=1, retain=True)
     #         deleted += 1
 
     #     logger.warning("PURGE outputs: done deleted=%d", deleted)
@@ -1971,7 +1971,7 @@ class Comfort2(mqtt.Client):
         Clear retained MQTT discovery configs for all known input topic styles.
         This helps HA forget old entity IDs when discovery naming has changed.
         """
-        max_inputs = int(getattr(settings, "MAX_ZONES", 96) or 96)
+        max_inputs = int(getattr(settings, "MAX_ZONES", 128) or 128)
  
         for i in range(1, max_inputs + 1):
             topics = [
@@ -1983,7 +1983,7 @@ class Comfort2(mqtt.Client):
             ]
 
             for topic in topics:
-                self.publish(topic, "", qos=1, retain=True)
+                self.publish(topic, None, qos=1, retain=True)
                 time.sleep(0.005)
 
 
@@ -2011,13 +2011,13 @@ class Comfort2(mqtt.Client):
             ]
 
             for topic in topics:
-                self.publish(topic, "", qos=1, retain=True)
+                self.publish(topic, None, qos=1, retain=True)
                 time.sleep(0.005)
 
     def clear_flag_discovery(self):
         for i in range(1, 255):
             topic = f"homeassistant/switch/{settings.DOMAIN}/flag{i:03d}/config"
-            self.publish(topic, "", qos=2, retain=True)
+            self.publish(topic, None, qos=2, retain=True)
             time.sleep(0.005)
 
     def clear_counter_discovery(self):
@@ -2025,7 +2025,7 @@ class Comfort2(mqtt.Client):
 
             # Clear number entity
             topic_number = f"homeassistant/number/{settings.DOMAIN}/counter{i:03d}/config"
-            self.publish(topic_number, "", qos=2, retain=True)
+            self.publish(topic_number, None, qos=2, retain=True)
 
             time.sleep(0.005)
 
@@ -2034,7 +2034,7 @@ class Comfort2(mqtt.Client):
 
             # Clear number entity
             topic_number = f"homeassistant/number/{settings.DOMAIN}/sensor{i:03d}/config"
-            self.publish(topic_number, "", qos=2, retain=True)
+            self.publish(topic_number, None, qos=2, retain=True)
 
             time.sleep(0.005)
 
@@ -2046,8 +2046,8 @@ class Comfort2(mqtt.Client):
             sensor_topic = f"homeassistant/sensor/{settings.DOMAIN}/timer{i:03d}/config"
 
 
-            self.publish(number_topic, "", qos=2, retain=True)
-            self.publish(sensor_topic, "", qos=2, retain=True)
+            self.publish(number_topic, None, qos=2, retain=True)
+            self.publish(sensor_topic, None, qos=2, retain=True)
             time.sleep(0.005)
 
   
@@ -2066,7 +2066,7 @@ class Comfort2(mqtt.Client):
             topics.append(f"homeassistant/sensor/{settings.DOMAIN}/dc_supply_slave{sem}_voltage/config")
 
         for topic in topics:
-             self.publish(topic, "", qos=2, retain=True)
+             self.publish(topic, None, qos=2, retain=True)
              time.sleep(0.02)
 
 
@@ -2081,7 +2081,7 @@ class Comfort2(mqtt.Client):
 
     def _clear_discovery(self, topic: str):
         # MQTT Discovery deletion: publish empty retained payload
-        self.publish(topic, "", qos=2, retain=True)
+        self.publish(topic, None, qos=2, retain=True)
 
     def _availability_block(self) -> dict:
         # Keep this consistent across all entities
@@ -2476,10 +2476,10 @@ class Comfort2(mqtt.Client):
             battery_discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/battery_slave{sem}_voltage/config"
             dc_discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/dc_supply_slave{sem}_voltage/config"
 
-            self.publish(battery_discovery_topic, "", qos=2, retain=True)
+            self.publish(battery_discovery_topic, None, qos=2, retain=True)
             time.sleep(0.02)
 
-            self.publish(dc_discovery_topic, "", qos=2, retain=True)
+            self.publish(dc_discovery_topic, None, qos=2, retain=True)
             time.sleep(0.02)
 
         sensors = [
@@ -2563,10 +2563,10 @@ class Comfort2(mqtt.Client):
             battery_topic = f"{settings.DOMAIN}/alarm/battery_slave{sem}_voltage"
             dc_topic = f"{settings.DOMAIN}/alarm/dc_supply_slave{sem}_voltage"
 
-            self.publish(battery_topic, "", qos=2, retain=True)
+            self.publish(battery_topic, None, qos=2, retain=True)
             time.sleep(0.02)
 
-            self.publish(dc_topic, "", qos=2, retain=True)
+            self.publish(dc_topic, None, qos=2, retain=True)
             time.sleep(0.02)
 
         # --------------------------------------------------
@@ -2851,7 +2851,7 @@ class Comfort2(mqtt.Client):
                 self.publish(settings.ALARMCOMMANDTOPIC, "comm test", qos=2, retain=True)
                 time.sleep(0.01)
 
-                self.publish(settings.REFRESHTOPIC, "", qos=2, retain=True)
+                self.publish(settings.REFRESHTOPIC, None, qos=2, retain=True)
                 time.sleep(0.01)
 
                 self.setdatetime()

@@ -44,7 +44,7 @@ RELOAD_COOLDOWN_SECONDS = 5              # prevent accidental spam
 
 SupportedFirmware = float(7.201)  # Minimum Supported firmware.
 
-MAX_ZONES = 96                    # Configurable for future expansion
+MAX_ZONES = 128                   # Configurable for future expansion
 MAX_OUTPUTS = 96                  # Configurable for future expansion
 MAX_RESPONSES = 1024              # Configurable for future expansion
 COMFORT_TIMERS = 64               # Default number of timers supported by Comfort II. Max 64.
@@ -58,7 +58,7 @@ MQTT_DEVICE_COMFORT = None    # MQTT Device info for Comfort. Set at runtime by 
 BUFFER_SIZE = 4096
 COMFORT_BATTERY_STATUS_ID = 1
 COMFORT_CCLX_FILE = None    # Path to active CCLX file (set at runtime)
-COMFORT_BAUDRATE = 115200             # 115200 (UCMA/Pi) (default) or 9600 (CM4Pi on CM9001)
+COMFORT_BAUDRATE = 115200   # 115200 (UCMA/Pi) (default) or 9600 (CM4Pi on CM9001)
 # ============================================================
 # MQTT SETTINGS
 # ============================================================

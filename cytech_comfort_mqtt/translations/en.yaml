@@ -4,8 +4,8 @@ configuration:
     name: Comfort baud rate
     description: >
       Select the serial baud rate for the Comfort connection.
-      Use 115200 for UCMA/Pi.
-      Use 9600 for CM4Pi on CM9001.
+      Use 115200 for UCMA/Pi or CM4Pi on CM9001.
+      Use 9600 for CM4Pi on UCMA/General.
   comfort_login_id:
     name: Comfort User Login ID
     description: >-

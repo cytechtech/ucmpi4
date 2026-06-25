@@ -1,6 +1,6 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.6-dev4"
+version: "1.0.7-dev1"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
@@ -52,7 +52,7 @@ options:
 
 
 schema:
-  comfort_serial_mode: list(UCMA/Pi|CM4Pi on CM9001)
+  comfort_serial_mode: list(UCMA/Pi & CM4Pi on CM9001|CM4Pi on UCMA/General)?
   comfort_login_id: password?
   comfort_battery_update: list(0|1|33|34|35|36|37|38|39)?
   log_verbosity: list(DEBUG|INFO|WARNING|ERROR|CRITICAL)?
