@@ -1,3 +1,18 @@
+## [1.0.11] 2026-10-01
+
+### Added
+- Live Alarm & Trouble Status reporting. 
+- Per-zone Set bypass and Clear bypass buttons with panel-confirmed status, including initial bypass states after discovery.
+
+### Changed
+- Selected trouble and informational alarm reports remain visible in the alarm log without setting the Home Assistant alarm state to Triggered.
+
+### Fixed
+- Report rejected logins in the MQTT Alarm Message Log and rotating RAM log, distinguish login rejection from session logout, and keep connection status offline until login succeeds.
+- Masked PINs in login and arming debug logs, omit disarm PINs, and throttle startup-readiness warnings with the known login failure reason.
+- Clear the retained synthetic communication-test command.
+- Clear stale Response discovery on MQTT startup/reconnection and recreate it after a successful connection.
+
 ## [1.0.10] - 2026-09-09
 
 ### Changed

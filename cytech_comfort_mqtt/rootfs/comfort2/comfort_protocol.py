@@ -150,9 +150,8 @@ class ComfortBYBypassActivationReport(object):
                 settings.BYPASSEDZONES.remove(self.zone)
                 if settings.BYPASSEDZONES.count(-1) == 0 and len(settings.BYPASSEDZONES) == 0:
                     settings.BYPASSEDZONES.append(0)        
-            else:
-                logger.debug("ValueError Exception: Bypassed Zone (%s) does not appear in settings.BYPASSEDZONES List[]", self.zone)
-        elif (self.state == 1) and (self.zone <= int(settings.COMFORT_INPUTS)):                     # State == 1 meaning must be in bypasszones
+            # Repeated BY/B? clear confirmations are normal and need no action.
+        elif (self.state > 0) and (self.zone <= int(settings.COMFORT_INPUTS)):  # Any nonzero state means bypassed
             if (self.zone not in settings.BYPASSEDZONES):
                 settings.BYPASSEDZONES.append(self.zone)
             if settings.BYPASSEDZONES.count(0) >= 1:        
@@ -339,11 +338,15 @@ class ComfortERArmReadyNotReady(object):
         self.zone = int(data[2:4],16)
 
 class ComfortAMSystemAlarmReport(object):
+    @staticmethod
+    def triggers_ha(alarm):
+        return alarm not in {1, 2, 3, 4, 7, 8, 9, 12, 13, 15, 17, 19, 22, 23, 24, 25, 26}
+
     def __init__(self, data={}):
         
 
         self.alarm = int(data[2:4],16)
-        self.triggered = True               # For Comfort Alarm State Alert, Trouble, Alarm
+        self.triggered = self.triggers_ha(self.alarm)
         self.parameter = int(data[4:6],16)
         low_battery = ['','Slave 1','Slave 2','Slave 3','Slave 4','Slave 5','Slave 6','Slave 7']
         if settings.ZONEMAPFILE:
